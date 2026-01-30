@@ -1,24 +1,25 @@
-// ZeroUI.hpp - Zero Elite User Interface Header
-// PROJECT ZERO | Modern Menu Interface
+// ZeroUI.hpp - PROJECT ZERO User Interface Header
+// Modern ImGui Menu Interface
 
 #pragma once
 
+// ImGui Headers
 #include "../include/imgui.h"
 
-// Global settings for Zero system
+// إعدادات النظام العامة
 extern bool esp_enabled;
 extern bool aimbot_enabled;
 extern float refresh_rate;
 extern float box_color[4];
 
-// Render the Zero menu
+// دوال التهيئة والإغلاق
+void InitializeZeroUI();
+void ShutdownZeroUI();
+
+// دالة رسم القائمة
 void RenderZeroMenu();
 
-// Menu visibility control
+// دوال التحكم بظهور القائمة
 void ToggleZeroMenu();
 bool IsZeroMenuVisible();
 void SetZeroMenuVisible(bool visible);
-
-// Initialize and shutdown
-void InitializeZeroUI();
-void ShutdownZeroUI();

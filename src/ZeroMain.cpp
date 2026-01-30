@@ -2,7 +2,9 @@
 // DirectX 11 Transparent Overlay with ImGui
 // FIXED: Input blocking, menu rendering, radar display
 
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <Windows.h>
 #include <d3d11.h>
 #include <dwmapi.h>

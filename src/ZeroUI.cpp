@@ -102,7 +102,7 @@ void RenderZeroMenu()
             ImGui::SliderFloat("Size", &radar_size, 100.0f, 400.0f, "%.0f");
             ImGui::SliderFloat("Zoom", &radar_zoom, 0.5f, 5.0f, "%.1f");
             ImGui::Checkbox("Show Teammates", &show_teammates);
-            ImGui::ColorEdit4("Enemy Color", box_color, ImGuiColorEditFlags_NoInputs);
+            ImGui::ColorEdit4("Enemy Color", box_color);
         }
         
         // Player count

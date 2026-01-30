@@ -1,37 +1,20 @@
-============================================
-PROJECT ZERO - Required Libraries
-============================================
+===============================================
+PROJECT ZERO - Required Libraries v3.3
+===============================================
 
-Place the following library files in this folder:
+Place the following files in this folder:
 
-1. vmmdll.lib
-   - Required for DMA memory operations
-   - Get from: https://github.com/ufrisk/MemProcFS/releases
-   - Download the latest release and extract vmmdll.lib
+1. vmmdll.lib       - DMA Memory Library (REQUIRED)
+2. leechcore.lib    - LeechCore Driver Library (Optional)
+3. FTD3XX.lib       - FTDI Driver Library (Optional)
 
-2. FTD3XX.lib (Optional - for FTD3XX driver mode)
-   - Required for maximum DMA speed
-   - Get from: FTDI website or your DMA device vendor
+Also place these DLLs in bin/Debug/ folder:
 
-3. leechcore.lib (Optional - for LeechCore support)
-   - Enhanced DMA functionality
-   - Get from: https://github.com/ufrisk/LeechCore/releases
+1. vmmdll.dll       - REQUIRED for runtime
+2. leechcore.dll    - REQUIRED for DMA hardware
+3. FTD3XX.dll       - Required if using FTD3XX mode
 
-============================================
-Installation Steps:
-============================================
+Download from:
+- https://github.com/ufrisk/MemProcFS/releases
 
-1. Download MemProcFS from GitHub releases
-2. Extract the archive
-3. Copy vmmdll.lib to this folder
-4. Also copy vmmdll.dll to your output/bin folder
-
-============================================
-Also needed in bin folder:
-============================================
-
-- vmmdll.dll
-- leechcore.dll
-- FTD3XX.dll (if using FTD3XX mode)
-
-============================================
+===============================================

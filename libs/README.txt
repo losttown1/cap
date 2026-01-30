@@ -1,33 +1,37 @@
-Zero Elite - Libraries Folder
-==============================
+============================================
+PROJECT ZERO - Required Libraries
+============================================
 
-This folder should contain the VMMDLL library file.
+Place the following library files in this folder:
 
-REQUIRED FILE:
---------------
-vmmdll.lib - The Virtual Memory Manager DLL import library
+1. vmmdll.lib
+   - Required for DMA memory operations
+   - Get from: https://github.com/ufrisk/MemProcFS/releases
+   - Download the latest release and extract vmmdll.lib
 
-HOW TO OBTAIN:
---------------
-1. Download MemProcFS from: https://github.com/ufrisk/MemProcFS
-2. Extract the package
-3. Copy 'vmmdll.lib' from the lib folder to this directory
+2. FTD3XX.lib (Optional - for FTD3XX driver mode)
+   - Required for maximum DMA speed
+   - Get from: FTDI website or your DMA device vendor
 
-The vmmdll.lib is linked in the source code using:
-#pragma comment(lib, "..\\libs\\vmmdll.lib")
+3. leechcore.lib (Optional - for LeechCore support)
+   - Enhanced DMA functionality
+   - Get from: https://github.com/ufrisk/LeechCore/releases
 
-ADDITIONAL FILES (Optional):
-----------------------------
-You may also want to copy the following files to your output directory:
-- vmm.dll
+============================================
+Installation Steps:
+============================================
+
+1. Download MemProcFS from GitHub releases
+2. Extract the archive
+3. Copy vmmdll.lib to this folder
+4. Also copy vmmdll.dll to your output/bin folder
+
+============================================
+Also needed in bin folder:
+============================================
+
+- vmmdll.dll
 - leechcore.dll
-- FTD3XX.dll (for FPGA DMA devices)
-- symsrv.dll (for symbol support)
+- FTD3XX.dll (if using FTD3XX mode)
 
-NOTE:
------
-The placeholder vmmdll.lib file included here is empty and must be replaced
-with the actual library file before building the project.
-
-For more information, visit:
-https://github.com/ufrisk/MemProcFS
+============================================

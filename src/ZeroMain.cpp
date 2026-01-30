@@ -8,6 +8,7 @@
 #include <dwmapi.h>
 #include <iostream>
 #include <chrono>
+#include <thread>
 
 // ImGui includes
 #include "../include/imgui.h"
@@ -160,10 +161,18 @@ bool KeyPressed(int vKey, bool& state)
     return false;
 }
 
+// Hide console window after delay
+void HideConsoleAfterDelay(int seconds)
+{
+    Sleep(seconds * 1000);
+    HWND console = GetConsoleWindow();
+    if (console) ShowWindow(console, SW_HIDE);
+}
+
 // Main entry point
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
 {
-    // Console for debugging
+    // Console for debugging (will hide after 3 seconds)
     AllocConsole();
     FILE* f; freopen_s(&f, "CONOUT$", "w", stdout); freopen_s(&f, "CONOUT$", "w", stderr);
 
@@ -175,6 +184,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
     std::cout << "  F1     = Hide/Show ALL overlay" << std::endl;
     std::cout << "  INSERT = Hide/Show menu only" << std::endl;
     std::cout << "  END    = Exit program" << std::endl;
+    std::cout << std::endl;
+    std::cout << ">>> Console will hide in 3 seconds <<<" << std::endl;
     std::cout << std::endl;
 
     // Register window class
@@ -248,8 +259,11 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
     }
 
     std::cout << std::endl;
-    std::cout << ">>> Overlay running! Press F1 to toggle visibility <<<" << std::endl;
+    std::cout << ">>> Overlay running! <<<" << std::endl;
     std::cout << std::endl;
+
+    // Hide console after 3 seconds (runs in background)
+    std::thread(HideConsoleAfterDelay, 3).detach();
 
     // Main loop
     MSG msg;

@@ -1,5 +1,5 @@
 // DMA_Engine.hpp - Professional DMA Engine
-// Features: Scatter Registry, Pattern Scanner, Config-driven Init, Map Textures
+// Features: Pre-Launch Diagnostics, Scatter Registry, Pattern Scanner, Config-driven Init
 
 #pragma once
 
@@ -12,15 +12,64 @@
 #include <functional>
 
 // ============================================================================
-// DMA CONFIGURATION - LOADED FROM CONFIG FILE
+// DMA CONFIGURATION
 // ============================================================================
 #define DMA_ENABLED 1
 
 // ============================================================================
-// CONFIG STRUCTURE (Loaded from zero.ini)
+// DIAGNOSTIC RESULT CODES
+// ============================================================================
+enum class DiagnosticResult {
+    SUCCESS = 0,
+    DEVICE_NOT_FOUND,
+    DEVICE_BUSY,
+    FIRMWARE_INVALID,
+    FIRMWARE_GENERIC,
+    FIRMWARE_LEAKED,
+    SPEED_TOO_SLOW,
+    PROCESS_NOT_FOUND,
+    BASE_ADDRESS_FAIL,
+    MEMORY_READ_FAIL,
+    UNKNOWN_ERROR
+};
+
+// ============================================================================
+// DIAGNOSTIC STATUS
+// ============================================================================
+struct DiagnosticStatus {
+    bool deviceHandshake = false;
+    bool firmwareCheck = false;
+    bool speedTest = false;
+    bool processFound = false;
+    bool memoryAccess = false;
+    
+    DiagnosticResult lastError = DiagnosticResult::SUCCESS;
+    char errorMessage[256] = {0};
+    
+    // Device info
+    char deviceName[64] = {0};
+    char firmwareVersion[32] = {0};
+    char deviceID[32] = {0};
+    bool isGenericID = false;
+    bool isLeakedID = false;
+    
+    // Speed test results
+    float readSpeedMBps = 0;
+    float writeSpeedMBps = 0;
+    int latencyUs = 0;
+    bool speedSufficient = false;
+    
+    // Overall status
+    bool allChecksPassed = false;
+};
+
+extern DiagnosticStatus g_DiagStatus;
+
+// ============================================================================
+// CONFIG STRUCTURE
 // ============================================================================
 struct DMAConfig {
-    // Device settings (Hardware-ID Masking)
+    // Device settings
     char deviceType[32] = "fpga";
     char deviceArg[64] = "";
     char deviceAlgo[16] = "0";
@@ -35,6 +84,16 @@ struct DMAConfig {
     int scatterBatchSize = 128;
     int updateRateHz = 120;
     bool useScatterRegistry = true;
+    
+    // Diagnostics
+    bool enableDiagnostics = true;
+    bool autoCloseOnFail = true;
+    float minSpeedMBps = 50.0f;
+    int maxLatencyUs = 5000;
+    
+    // Known leaked/generic IDs to warn about
+    bool warnGenericID = true;
+    bool warnLeakedID = true;
     
     // Map settings
     char mapImagePath[256] = "";
@@ -51,32 +110,27 @@ struct DMAConfig {
 
 extern DMAConfig g_Config;
 
-// Config file functions
+// Config functions
 bool LoadConfig(const char* filename = "zero.ini");
 bool SaveConfig(const char* filename = "zero.ini");
 void CreateDefaultConfig(const char* filename = "zero.ini");
 
 // ============================================================================
-// PATTERN SIGNATURES (AOB - Array of Bytes)
+// PATTERN SIGNATURES
 // ============================================================================
 namespace Patterns {
-    // Player Base Pattern
     constexpr const char* PlayerBase = "\x48\x8B\x05\x00\x00\x00\x00\x48\x8B\x88\x00\x00\x00\x00\x48\x8B\x01";
     constexpr const char* PlayerBaseMask = "xxx????xxx????xxx";
     
-    // Client Info Pattern
     constexpr const char* ClientInfo = "\x48\x8B\x1D\x00\x00\x00\x00\x48\x85\xDB\x74\x00\x48\x8B\x03";
     constexpr const char* ClientInfoMask = "xxx????xxxx?xxx";
     
-    // Entity List Pattern
     constexpr const char* EntityList = "\x48\x8D\x0D\x00\x00\x00\x00\xE8\x00\x00\x00\x00\x48\x85\xC0\x74";
     constexpr const char* EntityListMask = "xxx????x????xxxx";
     
-    // View Matrix Pattern
     constexpr const char* ViewMatrix = "\x48\x8B\x15\x00\x00\x00\x00\x48\x8D\x4C\x24\x00\xE8";
     constexpr const char* ViewMatrixMask = "xxx????xxxx?x";
     
-    // Refdef Pattern
     constexpr const char* Refdef = "\x48\x8D\x0D\x00\x00\x00\x00\xE8\x00\x00\x00\x00\x84\xC0\x0F\x84";
     constexpr const char* RefdefMask = "xxx????x????xxxx";
 }
@@ -91,7 +145,6 @@ struct GameOffsets {
     uintptr_t ViewMatrix = 0;
     uintptr_t Refdef = 0;
     
-    // Entity structure offsets
     static constexpr uintptr_t EntitySize = 0x568;
     static constexpr uintptr_t EntityPos = 0x138;
     static constexpr uintptr_t EntityHealth = 0x1C8;
@@ -102,7 +155,6 @@ struct GameOffsets {
     static constexpr uintptr_t EntityValid = 0x100;
     static constexpr uintptr_t EntityStance = 0x1E0;
     
-    // Bone offsets
     static constexpr uintptr_t BoneBase = 0x27F20;
     static constexpr uintptr_t BoneIndex = 0x150;
 };
@@ -169,7 +221,7 @@ struct PlayerData {
 };
 
 // ============================================================================
-// SCATTER READ REGISTRY (Professional Performance)
+// SCATTER READ REGISTRY
 // ============================================================================
 enum class ScatterDataType {
     PLAYER_POSITION,
@@ -190,24 +242,18 @@ struct ScatterEntry {
     void* buffer;
     size_t size;
     ScatterDataType type;
-    int playerIndex;  // -1 for non-player data
+    int playerIndex;
 };
 
 class ScatterReadRegistry {
 public:
-    // Register data to read every frame
     void RegisterPlayerData(int playerIndex, uintptr_t baseAddr);
     void RegisterLocalPlayer(uintptr_t baseAddr);
     void RegisterViewMatrix(uintptr_t addr);
     void RegisterCustomRead(uintptr_t addr, void* buf, size_t size);
-    
-    // Execute all registered reads in one transaction
     void ExecuteAll();
-    
-    // Clear registry
     void Clear();
     
-    // Get statistics
     int GetReadCount() const { return (int)m_Entries.size(); }
     int GetTotalBytes() const;
     int GetTransactionCount() const { return m_TransactionCount; }
@@ -216,7 +262,6 @@ private:
     std::vector<ScatterEntry> m_Entries;
     int m_TransactionCount = 0;
     
-    // Internal buffers for player data
     struct PlayerRawData {
         Vec3 position;
         int health;
@@ -229,12 +274,9 @@ private:
     };
     std::vector<PlayerRawData> m_PlayerBuffers;
     
-    // Local player buffer
     Vec3 m_LocalPosition;
     float m_LocalYaw;
     int m_LocalTeam;
-    
-    // View matrix buffer
     Matrix4x4 m_ViewMatrix;
 };
 
@@ -244,24 +286,20 @@ extern ScatterReadRegistry g_ScatterRegistry;
 // MAP TEXTURE SUPPORT
 // ============================================================================
 struct MapInfo {
-    // Map bounds in game coordinates
     float minX = -5000.0f;
     float maxX = 5000.0f;
     float minY = -5000.0f;
     float maxY = 5000.0f;
     
-    // Image dimensions
     int imageWidth = 0;
     int imageHeight = 0;
     
-    // Calibration
     float scaleX = 1.0f;
     float scaleY = 1.0f;
     float offsetX = 0.0f;
     float offsetY = 0.0f;
-    float rotation = 0.0f;  // Degrees
+    float rotation = 0.0f;
     
-    // Map name
     char name[64] = "";
     char imagePath[256] = "";
     bool hasTexture = false;
@@ -269,20 +307,13 @@ struct MapInfo {
 
 class MapTextureManager {
 public:
-    // Load map configuration
     static bool LoadMapConfig(const char* mapName);
     static bool LoadMapTexture(const char* imagePath);
-    
-    // Coordinate conversion
     static Vec2 GameToMapCoords(const Vec3& gamePos);
     static Vec2 GameToRadarCoords(const Vec3& gamePos, const Vec3& localPos, float localYaw,
                                    float radarCX, float radarCY, float radarSize, float zoom);
-    
-    // Map info
     static MapInfo& GetCurrentMap() { return s_CurrentMap; }
     static bool HasMapTexture() { return s_CurrentMap.hasTexture; }
-    
-    // Predefined map configs (BO6 maps)
     static void SetMapBounds(const char* mapName, float minX, float maxX, float minY, float maxY);
     static void InitializeMapDatabase();
     
@@ -292,15 +323,50 @@ private:
 };
 
 // ============================================================================
+// PRE-LAUNCH DIAGNOSTIC SYSTEM
+// ============================================================================
+class DiagnosticSystem {
+public:
+    // Run all diagnostics before UI launch
+    static bool RunAllDiagnostics();
+    
+    // Individual checks
+    static DiagnosticResult CheckDeviceHandshake();
+    static DiagnosticResult CheckFirmwareIntegrity();
+    static DiagnosticResult CheckMemorySpeed();
+    static DiagnosticResult CheckProcessAccess();
+    
+    // Get results
+    static DiagnosticStatus& GetStatus() { return g_DiagStatus; }
+    static const char* GetErrorString(DiagnosticResult result);
+    
+    // Self-destruct on failure
+    static void SelfDestruct(const char* reason);
+    
+    // Show error popup
+    static void ShowErrorPopup(const char* title, const char* message);
+    
+private:
+    // Known generic/leaked FPGA IDs
+    static bool IsGenericDeviceID(const char* deviceID);
+    static bool IsLeakedDeviceID(const char* deviceID);
+    
+    // Speed test helpers
+    static float MeasureReadSpeed(uintptr_t testAddr, size_t size, int iterations);
+    static int MeasureLatency(uintptr_t testAddr, int iterations);
+};
+
+// ============================================================================
 // DMA ENGINE
 // ============================================================================
 class DMAEngine {
 public:
-    // Initialization with config
+    // Initialization with diagnostics
     static bool Initialize();
     static bool InitializeWithConfig(const DMAConfig& config);
     static void Shutdown();
     static bool IsConnected();
+    static bool IsOnline();  // True only if all diagnostics passed
     static const char* GetStatus();
     static const char* GetDeviceInfo();
     
@@ -321,6 +387,7 @@ public:
     
 private:
     static bool s_Connected;
+    static bool s_Online;  // All diagnostics passed
     static bool s_SimulationMode;
     static uintptr_t s_BaseAddress;
     static size_t s_ModuleSize;

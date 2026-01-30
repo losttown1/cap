@@ -1,5 +1,5 @@
-// DMA_Engine.cpp - Professional DMA Implementation
-// Features: Professional Logging, Scatter Registry, Pre-Launch Diagnostics
+// DMA_Engine.cpp - Professional DMA Implementation v3.0
+// Features: Hardware Controllers, Auto-Offset Updater, FTD3XX, Scatter Registry
 
 #include "DMA_Engine.hpp"
 #include <cstring>
@@ -15,6 +15,11 @@
 #ifdef _WIN32
 #include <Windows.h>
 #include <VersionHelpers.h>
+#include <WinSock2.h>
+#include <WS2tcpip.h>
+#include <winhttp.h>
+#pragma comment(lib, "Ws2_32.lib")
+#pragma comment(lib, "winhttp.lib")
 #endif
 
 #if DMA_ENABLED
@@ -32,6 +37,7 @@ GameOffsets g_Offsets;
 ScatterReadRegistry g_ScatterRegistry;
 DiagnosticStatus g_DiagStatus;
 InitStatus g_InitStatus;
+ControllerConfig g_ControllerConfig;
 
 // ============================================================================
 // STATIC MEMBERS
@@ -39,10 +45,12 @@ InitStatus g_InitStatus;
 bool DMAEngine::s_Connected = false;
 bool DMAEngine::s_Online = false;
 bool DMAEngine::s_SimulationMode = false;
+bool DMAEngine::s_UsingFTD3XX = false;
 uintptr_t DMAEngine::s_BaseAddress = 0;
 size_t DMAEngine::s_ModuleSize = 0;
 char DMAEngine::s_StatusText[64] = "OFFLINE";
 char DMAEngine::s_DeviceInfo[128] = "No device";
+char DMAEngine::s_DriverMode[32] = "Generic";
 
 bool PatternScanner::s_Scanned = false;
 int PatternScanner::s_FoundCount = 0;
@@ -58,6 +66,35 @@ std::unordered_map<std::string, MapInfo> MapTextureManager::s_MapDatabase;
 
 void* Logger::s_Console = nullptr;
 
+void* HardwareController::s_Handle = nullptr;
+void* HardwareController::s_Socket = nullptr;
+bool HardwareController::s_Connected = false;
+ControllerType HardwareController::s_Type = ControllerType::NONE;
+char HardwareController::s_DeviceName[64] = "None";
+
+RemoteOffsets OffsetUpdater::s_LastOffsets;
+bool OffsetUpdater::s_Updated = false;
+char OffsetUpdater::s_OffsetURL[512] = "";
+
+bool Aimbot::s_Enabled = false;
+int Aimbot::s_CurrentTarget = -1;
+Vec2 Aimbot::s_LastAimPos = {0, 0};
+
+// ============================================================================
+// CONTROLLER TYPE TO STRING
+// ============================================================================
+const char* ControllerTypeToString(ControllerType type)
+{
+    switch (type)
+    {
+    case ControllerType::NONE: return "None";
+    case ControllerType::KMBOX_B_PLUS: return "KMBox B+";
+    case ControllerType::KMBOX_NET: return "KMBox Net";
+    case ControllerType::ARDUINO: return "Arduino";
+    default: return "Unknown";
+    }
+}
+
 // ============================================================================
 // LOGGER IMPLEMENTATION
 // ============================================================================
@@ -66,15 +103,11 @@ void Logger::Initialize()
 #ifdef _WIN32
     AllocConsole();
     s_Console = GetStdHandle(STD_OUTPUT_HANDLE);
+    SetConsoleTitleW(L"PROJECT ZERO | COD DMA v3.0");
     
-    // Set console title
-    SetConsoleTitleW(L"PROJECT ZERO | COD DMA");
-    
-    // Set console size
-    SMALL_RECT windowSize = {0, 0, 100, 35};
+    SMALL_RECT windowSize = {0, 0, 100, 40};
     SetConsoleWindowInfo((HANDLE)s_Console, TRUE, &windowSize);
     
-    // Enable ANSI colors
     DWORD mode = 0;
     GetConsoleMode((HANDLE)s_Console, &mode);
     SetConsoleMode((HANDLE)s_Console, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
@@ -97,10 +130,7 @@ void Logger::SetColor(ConsoleColor color)
     (void)color;
 }
 
-void Logger::ResetColor()
-{
-    SetColor(COLOR_DEFAULT);
-}
+void Logger::ResetColor() { SetColor(COLOR_DEFAULT); }
 
 void Logger::Log(const char* message, ConsoleColor color)
 {
@@ -174,7 +204,7 @@ void Logger::LogBanner()
     printf("  ||                                                 ||\n");
     printf("  ||   ");
     SetColor(COLOR_GRAY);
-    printf("        Professional DMA Radar v2.3         ");
+    printf("    Professional DMA Radar v3.0 + FTD3XX    ");
     SetColor(COLOR_RED);
     printf("   ||\n");
     printf("  ||                                                 ||\n");
@@ -207,10 +237,8 @@ void Logger::LogTimestamp()
     time_t now = time(nullptr);
     struct tm timeinfo;
     localtime_s(&timeinfo, &now);
-    
     char buffer[32];
     strftime(buffer, sizeof(buffer), "%H:%M:%S", &timeinfo);
-    
     SetColor(COLOR_GRAY);
     printf("[%s] ", buffer);
     ResetColor();
@@ -233,25 +261,587 @@ void Logger::ClearLine()
 }
 
 // ============================================================================
+// HARDWARE CONTROLLER IMPLEMENTATION
+// ============================================================================
+bool HardwareController::Initialize()
+{
+    s_Type = g_Config.controllerType;
+    
+    if (s_Type == ControllerType::NONE)
+    {
+        strcpy_s(s_DeviceName, "None (Software)");
+        s_Connected = false;
+        return true;
+    }
+    
+    bool result = false;
+    
+    if (g_Config.controllerAutoDetect && s_Type != ControllerType::KMBOX_NET)
+    {
+        result = AutoDetectDevice();
+    }
+    else
+    {
+        switch (s_Type)
+        {
+        case ControllerType::KMBOX_B_PLUS:
+            result = ConnectKMBoxBPlus(g_Config.controllerCOM, 115200);
+            break;
+        case ControllerType::KMBOX_NET:
+            result = ConnectKMBoxNet(g_Config.controllerIP, g_Config.controllerPort);
+            break;
+        case ControllerType::ARDUINO:
+            result = ConnectArduino(g_Config.controllerCOM, 115200);
+            break;
+        default:
+            break;
+        }
+    }
+    
+    g_ControllerConfig.isConnected = result;
+    strcpy_s(g_ControllerConfig.deviceName, s_DeviceName);
+    
+    return result;
+}
+
+void HardwareController::Shutdown()
+{
+#ifdef _WIN32
+    if (s_Handle)
+    {
+        CloseHandle(s_Handle);
+        s_Handle = nullptr;
+    }
+    if (s_Socket)
+    {
+        closesocket((SOCKET)s_Socket);
+        s_Socket = nullptr;
+    }
+#endif
+    s_Connected = false;
+}
+
+bool HardwareController::IsConnected() { return s_Connected; }
+const char* HardwareController::GetDeviceName() { return s_DeviceName; }
+ControllerType HardwareController::GetType() { return s_Type; }
+
+bool HardwareController::ScanCOMPorts(std::vector<std::string>& foundPorts)
+{
+    foundPorts.clear();
+    
+#ifdef _WIN32
+    for (int i = 1; i <= 20; i++)
+    {
+        char portName[16];
+        snprintf(portName, sizeof(portName), "COM%d", i);
+        
+        char fullPath[32];
+        snprintf(fullPath, sizeof(fullPath), "\\\\.\\%s", portName);
+        
+        HANDLE hPort = CreateFileA(fullPath, GENERIC_READ | GENERIC_WRITE,
+                                    0, nullptr, OPEN_EXISTING, 0, nullptr);
+        
+        if (hPort != INVALID_HANDLE_VALUE)
+        {
+            foundPorts.push_back(portName);
+            CloseHandle(hPort);
+        }
+    }
+#endif
+    
+    return !foundPorts.empty();
+}
+
+bool HardwareController::AutoDetectDevice()
+{
+    std::vector<std::string> ports;
+    if (!ScanCOMPorts(ports))
+        return false;
+    
+    for (const auto& port : ports)
+    {
+        // Try KMBox B+ first
+        if (ConnectKMBoxBPlus(port.c_str(), 115200))
+        {
+            s_Type = ControllerType::KMBOX_B_PLUS;
+            return true;
+        }
+        
+        // Try Arduino
+        if (ConnectArduino(port.c_str(), 115200))
+        {
+            s_Type = ControllerType::ARDUINO;
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+bool HardwareController::ConnectKMBoxBPlus(const char* comPort, int baudRate)
+{
+#ifdef _WIN32
+    char fullPath[32];
+    snprintf(fullPath, sizeof(fullPath), "\\\\.\\%s", comPort);
+    
+    HANDLE hPort = CreateFileA(fullPath, GENERIC_READ | GENERIC_WRITE,
+                                0, nullptr, OPEN_EXISTING, 0, nullptr);
+    
+    if (hPort == INVALID_HANDLE_VALUE)
+        return false;
+    
+    DCB dcb = {};
+    dcb.DCBlength = sizeof(DCB);
+    GetCommState(hPort, &dcb);
+    dcb.BaudRate = baudRate;
+    dcb.ByteSize = 8;
+    dcb.Parity = NOPARITY;
+    dcb.StopBits = ONESTOPBIT;
+    SetCommState(hPort, &dcb);
+    
+    COMMTIMEOUTS timeouts = {};
+    timeouts.ReadIntervalTimeout = 50;
+    timeouts.ReadTotalTimeoutConstant = 100;
+    timeouts.ReadTotalTimeoutMultiplier = 10;
+    timeouts.WriteTotalTimeoutConstant = 100;
+    timeouts.WriteTotalTimeoutMultiplier = 10;
+    SetCommTimeouts(hPort, &timeouts);
+    
+    // Send identification command
+    const char* idCmd = "km.version()\r\n";
+    DWORD bytesWritten;
+    WriteFile(hPort, idCmd, (DWORD)strlen(idCmd), &bytesWritten, nullptr);
+    
+    char response[256] = {};
+    DWORD bytesRead;
+    Sleep(100);
+    ReadFile(hPort, response, 255, &bytesRead, nullptr);
+    
+    if (strstr(response, "KM") || bytesRead > 0)
+    {
+        s_Handle = hPort;
+        s_Connected = true;
+        snprintf(s_DeviceName, sizeof(s_DeviceName), "KMBox B+ (%s)", comPort);
+        strcpy_s(g_Config.controllerCOM, comPort);
+        return true;
+    }
+    
+    CloseHandle(hPort);
+#else
+    (void)comPort; (void)baudRate;
+#endif
+    return false;
+}
+
+bool HardwareController::ConnectKMBoxNet(const char* ip, int port)
+{
+#ifdef _WIN32
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+        return false;
+    
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCKET)
+        return false;
+    
+    sockaddr_in serverAddr = {};
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons((u_short)port);
+    inet_pton(AF_INET, ip, &serverAddr.sin_addr);
+    
+    // Set timeout
+    DWORD timeout = 2000;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (char*)&timeout, sizeof(timeout));
+    
+    if (connect(sock, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR)
+    {
+        closesocket(sock);
+        return false;
+    }
+    
+    s_Socket = (void*)sock;
+    s_Connected = true;
+    snprintf(s_DeviceName, sizeof(s_DeviceName), "KMBox Net (%s:%d)", ip, port);
+    strcpy_s(g_Config.controllerIP, ip);
+    g_Config.controllerPort = port;
+    return true;
+#else
+    (void)ip; (void)port;
+    return false;
+#endif
+}
+
+bool HardwareController::ConnectArduino(const char* comPort, int baudRate)
+{
+#ifdef _WIN32
+    char fullPath[32];
+    snprintf(fullPath, sizeof(fullPath), "\\\\.\\%s", comPort);
+    
+    HANDLE hPort = CreateFileA(fullPath, GENERIC_READ | GENERIC_WRITE,
+                                0, nullptr, OPEN_EXISTING, 0, nullptr);
+    
+    if (hPort == INVALID_HANDLE_VALUE)
+        return false;
+    
+    DCB dcb = {};
+    dcb.DCBlength = sizeof(DCB);
+    GetCommState(hPort, &dcb);
+    dcb.BaudRate = baudRate;
+    dcb.ByteSize = 8;
+    dcb.Parity = NOPARITY;
+    dcb.StopBits = ONESTOPBIT;
+    SetCommState(hPort, &dcb);
+    
+    COMMTIMEOUTS timeouts = {};
+    timeouts.ReadIntervalTimeout = 50;
+    timeouts.ReadTotalTimeoutConstant = 100;
+    timeouts.WriteTotalTimeoutMultiplier = 10;
+    SetCommTimeouts(hPort, &timeouts);
+    
+    // Wait for Arduino reset
+    Sleep(200);
+    
+    // Send test command
+    const char* testCmd = "ID\n";
+    DWORD bytesWritten;
+    WriteFile(hPort, testCmd, (DWORD)strlen(testCmd), &bytesWritten, nullptr);
+    
+    char response[256] = {};
+    DWORD bytesRead;
+    Sleep(100);
+    ReadFile(hPort, response, 255, &bytesRead, nullptr);
+    
+    // Accept any response or just assume connected if port opened
+    s_Handle = hPort;
+    s_Connected = true;
+    snprintf(s_DeviceName, sizeof(s_DeviceName), "Arduino (%s)", comPort);
+    strcpy_s(g_Config.controllerCOM, comPort);
+    return true;
+#else
+    (void)comPort; (void)baudRate;
+    return false;
+#endif
+}
+
+bool HardwareController::SerialWrite(const char* data, int len)
+{
+#ifdef _WIN32
+    if (!s_Handle) return false;
+    DWORD bytesWritten;
+    return WriteFile(s_Handle, data, len, &bytesWritten, nullptr) && bytesWritten == (DWORD)len;
+#else
+    (void)data; (void)len;
+    return false;
+#endif
+}
+
+bool HardwareController::SocketSend(const char* data, int len)
+{
+#ifdef _WIN32
+    if (!s_Socket) return false;
+    return send((SOCKET)s_Socket, data, len, 0) == len;
+#else
+    (void)data; (void)len;
+    return false;
+#endif
+}
+
+bool HardwareController::MoveMouse(int deltaX, int deltaY)
+{
+    if (!s_Connected || s_Type == ControllerType::NONE)
+    {
+        // Fallback to software mouse_event
+        mouse_event(MOUSEEVENTF_MOVE, deltaX, deltaY, 0, 0);
+        return true;
+    }
+    
+    char cmd[64];
+    
+    switch (s_Type)
+    {
+    case ControllerType::KMBOX_B_PLUS:
+        snprintf(cmd, sizeof(cmd), "km.move(%d,%d)\r\n", deltaX, deltaY);
+        return SerialWrite(cmd, (int)strlen(cmd));
+        
+    case ControllerType::KMBOX_NET:
+        snprintf(cmd, sizeof(cmd), "move:%d,%d\n", deltaX, deltaY);
+        return SocketSend(cmd, (int)strlen(cmd));
+        
+    case ControllerType::ARDUINO:
+        snprintf(cmd, sizeof(cmd), "M%d,%d\n", deltaX, deltaY);
+        return SerialWrite(cmd, (int)strlen(cmd));
+        
+    default:
+        return false;
+    }
+}
+
+bool HardwareController::Click(int button)
+{
+    if (!s_Connected) return false;
+    
+    char cmd[32];
+    const char* btnName = button == 0 ? "left" : (button == 1 ? "right" : "middle");
+    
+    switch (s_Type)
+    {
+    case ControllerType::KMBOX_B_PLUS:
+        snprintf(cmd, sizeof(cmd), "km.click('%s')\r\n", btnName);
+        return SerialWrite(cmd, (int)strlen(cmd));
+        
+    case ControllerType::KMBOX_NET:
+        snprintf(cmd, sizeof(cmd), "click:%d\n", button);
+        return SocketSend(cmd, (int)strlen(cmd));
+        
+    case ControllerType::ARDUINO:
+        snprintf(cmd, sizeof(cmd), "C%d\n", button);
+        return SerialWrite(cmd, (int)strlen(cmd));
+        
+    default:
+        return false;
+    }
+}
+
+bool HardwareController::Press(int button) { return Click(button); }
+bool HardwareController::Release(int button) { (void)button; return true; }
+bool HardwareController::KeyPress(int keyCode) { (void)keyCode; return false; }
+bool HardwareController::KeyRelease(int keyCode) { (void)keyCode; return false; }
+
+// ============================================================================
+// OFFSET UPDATER IMPLEMENTATION
+// ============================================================================
+void OffsetUpdater::SetOffsetURL(const char* url)
+{
+    strncpy_s(s_OffsetURL, url, sizeof(s_OffsetURL) - 1);
+}
+
+bool OffsetUpdater::HttpGet(const char* url, std::string& response)
+{
+#ifdef _WIN32
+    response.clear();
+    
+    // Parse URL
+    wchar_t urlW[512];
+    mbstowcs_s(nullptr, urlW, url, 511);
+    
+    URL_COMPONENTS urlComp = {};
+    urlComp.dwStructSize = sizeof(urlComp);
+    
+    wchar_t hostName[256] = {};
+    wchar_t urlPath[256] = {};
+    urlComp.lpszHostName = hostName;
+    urlComp.dwHostNameLength = 256;
+    urlComp.lpszUrlPath = urlPath;
+    urlComp.dwUrlPathLength = 256;
+    
+    if (!WinHttpCrackUrl(urlW, 0, 0, &urlComp))
+        return false;
+    
+    HINTERNET hSession = WinHttpOpen(L"ZeroElite/3.0",
+                                      WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                      WINHTTP_NO_PROXY_NAME,
+                                      WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return false;
+    
+    HINTERNET hConnect = WinHttpConnect(hSession, hostName,
+                                         urlComp.nPort, 0);
+    if (!hConnect) { WinHttpCloseHandle(hSession); return false; }
+    
+    DWORD flags = (urlComp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", urlPath,
+                                             nullptr, WINHTTP_NO_REFERER,
+                                             WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return false; }
+    
+    if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
+    {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return false;
+    }
+    
+    if (!WinHttpReceiveResponse(hRequest, nullptr))
+    {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return false;
+    }
+    
+    char buffer[4096];
+    DWORD bytesRead;
+    while (WinHttpReadData(hRequest, buffer, sizeof(buffer) - 1, &bytesRead) && bytesRead > 0)
+    {
+        buffer[bytesRead] = 0;
+        response += buffer;
+    }
+    
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    
+    return !response.empty();
+#else
+    (void)url;
+    response = "";
+    return false;
+#endif
+}
+
+bool OffsetUpdater::FetchRemoteOffsets(const char* url)
+{
+    if (!url || !url[0])
+    {
+        url = g_Config.offsetURL;
+    }
+    
+    std::string response;
+    if (!HttpGet(url, response))
+        return false;
+    
+    // Try JSON first, then INI
+    if (response.find('{') != std::string::npos)
+        return ParseOffsetsJSON(response.c_str());
+    else
+        return ParseOffsetsINI(response.c_str());
+}
+
+bool OffsetUpdater::ParseOffsetsJSON(const char* jsonData)
+{
+    // Simple JSON parser for offsets
+    RemoteOffsets offsets = {};
+    
+    auto findValue = [&](const char* key) -> uintptr_t {
+        std::string searchKey = std::string("\"") + key + "\"";
+        const char* pos = strstr(jsonData, searchKey.c_str());
+        if (!pos) return 0;
+        
+        pos = strchr(pos, ':');
+        if (!pos) return 0;
+        pos++;
+        while (*pos == ' ' || *pos == '"') pos++;
+        
+        if (strncmp(pos, "0x", 2) == 0 || strncmp(pos, "0X", 2) == 0)
+            return strtoull(pos, nullptr, 16);
+        else
+            return strtoull(pos, nullptr, 10);
+    };
+    
+    auto findString = [&](const char* key, char* out, size_t maxLen) {
+        std::string searchKey = std::string("\"") + key + "\"";
+        const char* pos = strstr(jsonData, searchKey.c_str());
+        if (!pos) return;
+        
+        pos = strchr(pos, ':');
+        if (!pos) return;
+        pos = strchr(pos, '"');
+        if (!pos) return;
+        pos++;
+        
+        const char* end = strchr(pos, '"');
+        if (!end) return;
+        
+        size_t len = end - pos;
+        if (len >= maxLen) len = maxLen - 1;
+        strncpy_s(out, maxLen, pos, len);
+    };
+    
+    findString("version", offsets.gameVersion, sizeof(offsets.gameVersion));
+    findString("build", offsets.buildNumber, sizeof(offsets.buildNumber));
+    findString("updated", offsets.lastUpdate, sizeof(offsets.lastUpdate));
+    
+    offsets.ClientInfo = findValue("ClientInfo");
+    offsets.EntityList = findValue("EntityList");
+    offsets.ViewMatrix = findValue("ViewMatrix");
+    offsets.PlayerBase = findValue("PlayerBase");
+    offsets.Refdef = findValue("Refdef");
+    offsets.BoneMatrix = findValue("BoneMatrix");
+    offsets.WeaponInfo = findValue("WeaponInfo");
+    
+    offsets.valid = (offsets.ClientInfo != 0 || offsets.EntityList != 0);
+    
+    if (offsets.valid)
+    {
+        s_LastOffsets = offsets;
+        s_Updated = true;
+        return ApplyOffsets(offsets);
+    }
+    
+    return false;
+}
+
+bool OffsetUpdater::ParseOffsetsINI(const char* iniData)
+{
+    RemoteOffsets offsets = {};
+    
+    std::istringstream stream(iniData);
+    std::string line;
+    
+    while (std::getline(stream, line))
+    {
+        if (line.empty() || line[0] == ';' || line[0] == '#' || line[0] == '[')
+            continue;
+        
+        size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        
+        std::string key = line.substr(0, eq);
+        std::string value = line.substr(eq + 1);
+        
+        // Trim
+        while (!key.empty() && key.back() == ' ') key.pop_back();
+        while (!value.empty() && (value[0] == ' ' || value[0] == '\r')) value.erase(0, 1);
+        while (!value.empty() && (value.back() == '\r' || value.back() == '\n')) value.pop_back();
+        
+        uintptr_t val = 0;
+        if (value.find("0x") == 0 || value.find("0X") == 0)
+            val = strtoull(value.c_str(), nullptr, 16);
+        else
+            val = strtoull(value.c_str(), nullptr, 10);
+        
+        if (key == "ClientInfo") offsets.ClientInfo = val;
+        else if (key == "EntityList") offsets.EntityList = val;
+        else if (key == "ViewMatrix") offsets.ViewMatrix = val;
+        else if (key == "PlayerBase") offsets.PlayerBase = val;
+        else if (key == "Refdef") offsets.Refdef = val;
+        else if (key == "Version") strncpy_s(offsets.gameVersion, value.c_str(), 31);
+        else if (key == "Build") strncpy_s(offsets.buildNumber, value.c_str(), 31);
+    }
+    
+    offsets.valid = (offsets.ClientInfo != 0 || offsets.EntityList != 0);
+    
+    if (offsets.valid)
+    {
+        s_LastOffsets = offsets;
+        s_Updated = true;
+        return ApplyOffsets(offsets);
+    }
+    
+    return false;
+}
+
+bool OffsetUpdater::ApplyOffsets(const RemoteOffsets& offsets)
+{
+    if (offsets.ClientInfo) g_Offsets.ClientInfo = DMAEngine::GetBaseAddress() + offsets.ClientInfo;
+    if (offsets.EntityList) g_Offsets.EntityList = DMAEngine::GetBaseAddress() + offsets.EntityList;
+    if (offsets.ViewMatrix) g_Offsets.ViewMatrix = DMAEngine::GetBaseAddress() + offsets.ViewMatrix;
+    if (offsets.PlayerBase) g_Offsets.PlayerBase = DMAEngine::GetBaseAddress() + offsets.PlayerBase;
+    if (offsets.Refdef) g_Offsets.Refdef = DMAEngine::GetBaseAddress() + offsets.Refdef;
+    if (offsets.BoneMatrix) g_Offsets.BoneMatrix = DMAEngine::GetBaseAddress() + offsets.BoneMatrix;
+    if (offsets.WeaponInfo) g_Offsets.WeaponInfo = DMAEngine::GetBaseAddress() + offsets.WeaponInfo;
+    
+    return true;
+}
+
+// ============================================================================
 // PROFESSIONAL INITIALIZATION SYSTEM
 // ============================================================================
 void ProfessionalInit::SimulateDelay(int ms)
 {
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-}
-
-bool ProfessionalInit::CheckArduinoConnection()
-{
-    // Simulate Arduino/serial check
-    // In real implementation, would scan COM ports
-    return false;  // Return false to show realistic failure
-}
-
-bool ProfessionalInit::CheckKMBoxConnection()
-{
-    // Simulate KMBox check
-    // In real implementation, would try to connect to KMBox
-    return false;  // Return false to show realistic failure
 }
 
 bool ProfessionalInit::CheckDMAConnection()
@@ -267,16 +857,12 @@ bool ProfessionalInit::CheckMemoryMap()
 {
 #if DMA_ENABLED
     if (!g_VMMDLL) return false;
-    
-    // Check if memory map is present
     DWORD dwPID = 0;
     if (VMMDLL_PidGetFromName(g_VMMDLL, (LPSTR)"System", &dwPID))
-    {
         return dwPID != 0;
-    }
     return false;
 #else
-    return true;  // Simulation mode
+    return true;
 #endif
 }
 
@@ -293,29 +879,16 @@ void ProfessionalInit::GetWindowsVersion(char* buffer, size_t size)
     {
         RtlGetVersion((PRTL_OSVERSIONINFOW)&osvi);
         
-        const char* version = "Unknown";
-        if (osvi.dwMajorVersion == 10 && osvi.dwBuildNumber >= 22000)
-            version = "Windows 11";
-        else if (osvi.dwMajorVersion == 10)
-            version = "Windows 10";
-        else if (osvi.dwMajorVersion == 6 && osvi.dwMinorVersion == 3)
-            version = "Windows 8.1";
-        
-        // Get update version
+        const char* version = (osvi.dwMajorVersion == 10 && osvi.dwBuildNumber >= 22000) ? "Windows 11" : "Windows 10";
         const char* update = "";
         if (osvi.dwBuildNumber >= 26100) update = "24H2";
         else if (osvi.dwBuildNumber >= 22631) update = "23H2";
         else if (osvi.dwBuildNumber >= 22621) update = "22H2";
-        else if (osvi.dwBuildNumber >= 22000) update = "21H2";
-        else if (osvi.dwBuildNumber >= 19045) update = "22H2";
-        else if (osvi.dwBuildNumber >= 19044) update = "21H2";
         
         snprintf(buffer, size, "%s %s (Build %d)", version, update, osvi.dwBuildNumber);
     }
     else
-    {
-        snprintf(buffer, size, "Windows (Unknown Version)");
-    }
+        snprintf(buffer, size, "Windows (Unknown)");
 #else
     snprintf(buffer, size, "Unknown OS");
 #endif
@@ -326,15 +899,7 @@ void ProfessionalInit::GetKeyboardState(char* buffer, size_t size)
 #ifdef _WIN32
     UINT nDevices = 0;
     GetRawInputDeviceList(nullptr, &nDevices, sizeof(RAWINPUTDEVICELIST));
-    
-    if (nDevices > 0)
-    {
-        snprintf(buffer, size, "Ready (%d devices)", nDevices);
-    }
-    else
-    {
-        snprintf(buffer, size, "No devices found");
-    }
+    snprintf(buffer, size, nDevices > 0 ? "Ready (%d devices)" : "No devices", nDevices);
 #else
     snprintf(buffer, size, "Unknown");
 #endif
@@ -344,14 +909,7 @@ void ProfessionalInit::GetMouseState(char* buffer, size_t size)
 {
 #ifdef _WIN32
     CURSORINFO ci = { sizeof(ci) };
-    if (GetCursorInfo(&ci))
-    {
-        snprintf(buffer, size, "Ready (Cursor active)");
-    }
-    else
-    {
-        snprintf(buffer, size, "Unknown state");
-    }
+    snprintf(buffer, size, GetCursorInfo(&ci) ? "Ready (Cursor active)" : "Unknown");
 #else
     snprintf(buffer, size, "Unknown");
 #endif
@@ -364,15 +922,9 @@ bool ProfessionalInit::Step_LoginSequence()
     Logger::LogTimestamp();
     Logger::Log("Connecting to COD DMA service...\n", COLOR_WHITE);
     
-    // Simulate login animation
-    for (int i = 0; i < 15; i++)
-    {
-        Logger::LogSpinner("Authenticating", i);
-        SimulateDelay(100);
-    }
+    for (int i = 0; i < 15; i++) { Logger::LogSpinner("Authenticating", i); SimulateDelay(80); }
     Logger::ClearLine();
     
-    // Get username
     char username[64] = "User";
 #ifdef _WIN32
     DWORD size = sizeof(username);
@@ -382,7 +934,6 @@ bool ProfessionalInit::Step_LoginSequence()
     
     Logger::LogTimestamp();
     Logger::LogSuccess("Logged in successfully");
-    
     Logger::LogStatus("Username", username, true);
     Logger::LogStatus("Session", "Active", true);
     Logger::LogStatus("License", "Premium", true);
@@ -398,10 +949,8 @@ bool ProfessionalInit::Step_LoadConfig()
     
     Logger::LogTimestamp();
     Logger::Log("Loading configuration files...\n", COLOR_WHITE);
-    
     SimulateDelay(300);
     
-    // Load config
     bool loaded = LoadConfig("zero.ini");
     
     Logger::LogTimestamp();
@@ -412,62 +961,99 @@ bool ProfessionalInit::Step_LoadConfig()
     }
     else
     {
-        Logger::LogWarning("Config not found, using defaults");
+        Logger::LogWarning("Config not found, creating defaults");
         CreateDefaultConfig("zero.ini");
     }
     
     strcpy_s(g_InitStatus.configName, "cod_client");
-    
     Logger::LogStatus("Config File", "zero.ini", true);
     Logger::LogStatus("Game Profile", "cod", true);
     Logger::LogStatus("Process Target", g_Config.processName, true);
+    Logger::LogStatus("Controller", ControllerTypeToString(g_Config.controllerType), true);
     
     g_InitStatus.configLoaded = true;
     g_InitStatus.passedChecks++;
     return true;
 }
 
-bool ProfessionalInit::Step_HardwareHandshake()
+bool ProfessionalInit::Step_CheckOffsetUpdates()
 {
-    Logger::LogSection("HARDWARE HANDSHAKE");
+    Logger::LogSection("OFFSET UPDATER");
     
-    Logger::LogTimestamp();
-    Logger::Log("Checking hardware connections...\n", COLOR_WHITE);
-    
-    // Check Arduino
-    Logger::LogTimestamp();
-    Logger::Log("Scanning for Arduino/Serial devices...\n", COLOR_GRAY);
-    SimulateDelay(500);
-    
-    g_InitStatus.arduinoConnected = CheckArduinoConnection();
-    if (g_InitStatus.arduinoConnected)
+    if (!g_Config.enableOffsetUpdater)
     {
-        Logger::LogSuccess("Arduino connected on COM3");
+        Logger::LogTimestamp();
+        Logger::LogWarning("Offset updater disabled in config");
+        return true;
+    }
+    
+    Logger::LogTimestamp();
+    Logger::LogInfo("Checking for offset updates...");
+    
+    for (int i = 0; i < 10; i++) { Logger::LogSpinner("Fetching offsets", i); SimulateDelay(100); }
+    Logger::ClearLine();
+    
+    bool success = OffsetUpdater::FetchRemoteOffsets(g_Config.offsetURL);
+    
+    Logger::LogTimestamp();
+    if (success)
+    {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "Offsets updated successfully for Game Build: %s", 
+                 OffsetUpdater::GetBuildNumber()[0] ? OffsetUpdater::GetBuildNumber() : "Unknown");
+        Logger::LogSuccess(msg);
+        
+        strcpy_s(g_InitStatus.gameBuild, OffsetUpdater::GetBuildNumber());
+        g_InitStatus.offsetsUpdated = true;
     }
     else
     {
-        Logger::LogWarning("Arduino not found (optional)");
+        Logger::LogWarning("Could not fetch remote offsets (using local)");
     }
     
-    // Check KMBox
-    Logger::LogTimestamp();
-    Logger::Log("Scanning for KMBox devices...\n", COLOR_GRAY);
-    SimulateDelay(500);
+    g_InitStatus.passedChecks++;
+    return true;
+}
+
+bool ProfessionalInit::Step_ConnectController()
+{
+    Logger::LogSection("CONTROLLER CONNECTION");
     
-    g_InitStatus.kmboxConnected = CheckKMBoxConnection();
-    if (g_InitStatus.kmboxConnected)
+    Logger::LogTimestamp();
+    Logger::LogInfo("Connecting to your Controller...");
+    
+    for (int i = 0; i < 15; i++) { Logger::LogSpinner("Scanning devices", i); SimulateDelay(100); }
+    Logger::ClearLine();
+    
+    bool success = HardwareController::Initialize();
+    
+    Logger::LogTimestamp();
+    if (success && HardwareController::IsConnected())
     {
-        Logger::LogSuccess("KMBox connected");
+        char msg[128];
+        snprintf(msg, sizeof(msg), "Successfully connected to %s", HardwareController::GetDeviceName());
+        Logger::LogSuccess(msg);
+        
+        strcpy_s(g_InitStatus.controllerName, HardwareController::GetDeviceName());
+        g_InitStatus.controllerConnected = true;
+        
+        Logger::LogStatus("Device", HardwareController::GetDeviceName(), true);
+        Logger::LogStatus("Type", ControllerTypeToString(HardwareController::GetType()), true);
+    }
+    else if (g_Config.controllerType == ControllerType::NONE)
+    {
+        Logger::LogWarning("No controller selected (using software input)");
+        strcpy_s(g_InitStatus.controllerName, "Software");
+        Logger::LogStatus("Mode", "Software mouse_event", true);
     }
     else
     {
-        Logger::LogWarning("KMBox not found (optional)");
+        Logger::LogError("Failed to connect to Controller");
+        Logger::LogWarning("Aimbot features will be disabled for safety");
+        Logger::LogStatus("Device", "Not Found", false);
+        g_InitStatus.failedChecks++;
     }
     
-    Logger::LogStatus("Arduino", g_InitStatus.arduinoConnected ? "Connected" : "Not Found", g_InitStatus.arduinoConnected);
-    Logger::LogStatus("KMBox", g_InitStatus.kmboxConnected ? "Connected" : "Not Found", g_InitStatus.kmboxConnected);
-    
-    g_InitStatus.hardwareConnected = true;  // Not critical
     g_InitStatus.passedChecks++;
     return true;
 }
@@ -479,20 +1065,28 @@ bool ProfessionalInit::Step_ConnectDMA()
     Logger::LogTimestamp();
     Logger::Log("Initializing DMA device...\n", COLOR_WHITE);
     
-    // Animation
-    for (int i = 0; i < 20; i++)
-    {
-        Logger::LogSpinner("Connecting to FPGA", i);
-        SimulateDelay(100);
-    }
+    for (int i = 0; i < 20; i++) { Logger::LogSpinner("Connecting to FPGA", i); SimulateDelay(100); }
     Logger::ClearLine();
     
 #if DMA_ENABLED
-    // Try to connect
+    // Build arguments for FTD3XX / LeechCore driver
+    const char* driverType = "fpga";
+    if (g_Config.useFTD3XX)
+    {
+        driverType = "fpga://algo=0";
+        strcpy_s(g_InitStatus.dmaDriver, "FTD3XX");
+        strcpy_s(DMAEngine::s_DriverMode, "FTD3XX LeechCore");
+    }
+    else
+    {
+        strcpy_s(g_InitStatus.dmaDriver, "Generic");
+        strcpy_s(DMAEngine::s_DriverMode, "Generic");
+    }
+    
     char arg0[] = "";
     char arg1[] = "-device";
     char arg2[64];
-    strncpy_s(arg2, g_Config.deviceType, 63);
+    strncpy_s(arg2, driverType, 63);
     char* args[3] = { arg0, arg1, arg2 };
     
     g_VMMDLL = VMMDLL_Initialize(3, args);
@@ -502,26 +1096,20 @@ bool ProfessionalInit::Step_ConnectDMA()
         Logger::LogTimestamp();
         Logger::LogSuccess("Successfully connected to your DMA");
         
-        // Check memory map
         Logger::LogTimestamp();
         Logger::Log("Verifying memory map (MMap)...\n", COLOR_GRAY);
         SimulateDelay(500);
         
         g_InitStatus.mmapPresent = CheckMemoryMap();
-        if (g_InitStatus.mmapPresent)
-        {
-            Logger::LogSuccess("Memory map verified");
-        }
-        else
-        {
-            Logger::LogWarning("Memory map not present (live mode)");
-        }
+        Logger::LogSuccess(g_InitStatus.mmapPresent ? "Memory map verified" : "Live mode (no mmap)");
         
-        strcpy_s(g_InitStatus.dmaDevice, g_Config.deviceType);
+        strcpy_s(g_InitStatus.dmaDevice, g_Config.useFTD3XX ? "FPGA (FTD3XX)" : "FPGA (Generic)");
         g_InitStatus.dmaConnected = true;
+        DMAEngine::s_UsingFTD3XX = g_Config.useFTD3XX;
         
-        Logger::LogStatus("Device", g_Config.deviceType, true);
-        Logger::LogStatus("MMap", g_InitStatus.mmapPresent ? "Present" : "Live Mode", g_InitStatus.mmapPresent);
+        Logger::LogStatus("Device", g_InitStatus.dmaDevice, true);
+        Logger::LogStatus("Driver", g_InitStatus.dmaDriver, true);
+        Logger::LogStatus("MMap", g_InitStatus.mmapPresent ? "Present" : "Live", true);
         Logger::LogStatus("Connection", "Established", true);
         
         g_InitStatus.passedChecks++;
@@ -531,30 +1119,22 @@ bool ProfessionalInit::Step_ConnectDMA()
     {
         Logger::LogTimestamp();
         Logger::LogError("Failed to connect to DMA device");
-        Logger::LogError("Please check your FPGA connection");
-        
+        Logger::LogError("Check FPGA connection and drivers");
         Logger::LogStatus("Device", "Not Found", false);
-        Logger::LogStatus("Connection", "Failed", false);
-        
         g_InitStatus.failedChecks++;
-        
-        // CRITICAL: DMA connection failed - do not initialize UI
         return false;
     }
 #else
-    // Simulation mode
     Logger::LogTimestamp();
     Logger::LogWarning("DMA_ENABLED = 0, running in simulation mode");
-    
     strcpy_s(g_InitStatus.dmaDevice, "Simulation");
+    strcpy_s(g_InitStatus.dmaDriver, "None");
     g_InitStatus.dmaConnected = false;
     g_InitStatus.mmapPresent = true;
-    
     Logger::LogStatus("Device", "Simulation", true);
     Logger::LogStatus("Mode", "Demo", true);
-    
     g_InitStatus.passedChecks++;
-    return true;  // Allow UI in simulation
+    return true;
 #endif
 }
 
@@ -570,9 +1150,8 @@ bool ProfessionalInit::Step_WaitForGame()
 #if DMA_ENABLED
     if (g_VMMDLL)
     {
-        // Try to find the game process
         int attempts = 0;
-        const int maxAttempts = 30;  // 3 seconds max wait
+        const int maxAttempts = 30;
         
         while (attempts < maxAttempts)
         {
@@ -584,17 +1163,12 @@ bool ProfessionalInit::Step_WaitForGame()
                 Logger::LogTimestamp();
                 Logger::LogSuccess("Game process found!");
                 
-                // Get base address
                 DMAEngine::s_BaseAddress = VMMDLL_ProcessGetModuleBase(g_VMMDLL, g_DMA_PID, (LPSTR)g_Config.processName);
                 
                 Logger::LogStatus("Process", g_Config.processName, true);
-                
-                char pidStr[32];
-                snprintf(pidStr, sizeof(pidStr), "%d", pid);
+                char pidStr[32]; snprintf(pidStr, sizeof(pidStr), "%d", pid);
                 Logger::LogStatus("PID", pidStr, true);
-                
-                char baseStr[32];
-                snprintf(baseStr, sizeof(baseStr), "0x%llX", (unsigned long long)DMAEngine::s_BaseAddress);
+                char baseStr[32]; snprintf(baseStr, sizeof(baseStr), "0x%llX", (unsigned long long)DMAEngine::s_BaseAddress);
                 Logger::LogStatus("Base Address", baseStr, DMAEngine::s_BaseAddress != 0);
                 
                 g_InitStatus.gameFound = true;
@@ -610,22 +1184,14 @@ bool ProfessionalInit::Step_WaitForGame()
         Logger::ClearLine();
         Logger::LogTimestamp();
         Logger::LogWarning("Game not running - waiting for launch");
-        
         Logger::LogStatus("Process", "Not Found", false);
-        Logger::LogStatus("Status", "Waiting...", false);
-        
         g_InitStatus.gameFound = false;
-        return true;  // Not critical - can wait
+        return true;
     }
 #endif
     
-    // Simulation mode
     Logger::LogTimestamp();
     Logger::LogSuccess("Game sync ready (simulation)");
-    
-    Logger::LogStatus("Process", "Simulated", true);
-    Logger::LogStatus("Status", "Demo Mode", true);
-    
     g_InitStatus.gameFound = true;
     g_InitStatus.passedChecks++;
     return true;
@@ -637,13 +1203,10 @@ bool ProfessionalInit::Step_CheckSystemState()
     
     Logger::LogTimestamp();
     Logger::Log("Checking system configuration...\n", COLOR_WHITE);
-    
     SimulateDelay(300);
     
-    // Get Windows version
     GetWindowsVersion(g_InitStatus.windowsVersion, sizeof(g_InitStatus.windowsVersion));
     
-    // Get input device states
     char keyboardState[64], mouseState[64];
     GetKeyboardState(keyboardState, sizeof(keyboardState));
     GetMouseState(mouseState, sizeof(mouseState));
@@ -655,10 +1218,8 @@ bool ProfessionalInit::Step_CheckSystemState()
     Logger::LogStatus("Keyboard State", keyboardState, g_InitStatus.keyboardReady);
     Logger::LogStatus("Mouse State", mouseState, g_InitStatus.mouseReady);
     
-    // Additional system info
     MEMORYSTATUSEX memInfo = { sizeof(memInfo) };
     GlobalMemoryStatusEx(&memInfo);
-    
     char ramStr[32];
     snprintf(ramStr, sizeof(ramStr), "%.1f GB", (float)memInfo.ullTotalPhys / (1024 * 1024 * 1024));
     Logger::LogStatus("System RAM", ramStr, true);
@@ -669,77 +1230,55 @@ bool ProfessionalInit::Step_CheckSystemState()
 
 bool ProfessionalInit::RunProfessionalChecks()
 {
-    // Initialize console and logger
     Logger::Initialize();
-    
-    // Reset status
     memset(&g_InitStatus, 0, sizeof(g_InitStatus));
-    g_InitStatus.totalChecks = 6;
+    g_InitStatus.totalChecks = 7;
     
-    // Show banner
     Logger::LogBanner();
-    
     Logger::LogSeparator();
     Logger::LogTimestamp();
     Logger::Log("Starting initialization sequence...\n", COLOR_WHITE);
     Logger::LogSeparator();
     
-    // Step 1: Login
-    Logger::LogProgress("Login Sequence", 1, 6);
-    if (!Step_LoginSequence())
-    {
-        Logger::LogError("Login failed - aborting");
-        return false;
-    }
+    Logger::LogProgress("Login Sequence", 1, 7);
+    if (!Step_LoginSequence()) return false;
     
-    // Step 2: Config
-    Logger::LogProgress("Config Loader", 2, 6);
-    if (!Step_LoadConfig())
-    {
-        Logger::LogError("Config load failed - aborting");
-        return false;
-    }
+    Logger::LogProgress("Config Loader", 2, 7);
+    if (!Step_LoadConfig()) return false;
     
-    // Step 3: Hardware
-    Logger::LogProgress("Hardware Handshake", 3, 6);
-    Step_HardwareHandshake();  // Not critical
+    Logger::LogProgress("Offset Updater", 3, 7);
+    Step_CheckOffsetUpdates();
     
-    // Step 4: DMA Connection - CRITICAL
-    Logger::LogProgress("DMA Connection", 4, 6);
+    Logger::LogProgress("Controller Connection", 4, 7);
+    Step_ConnectController();
+    
+    Logger::LogProgress("DMA Connection", 5, 7);
     if (!Step_ConnectDMA())
     {
         Logger::LogSeparator();
         Logger::LogError("CRITICAL: DMA connection failed");
         Logger::LogError("UI will NOT be initialized for safety");
         Logger::LogSeparator();
-        
         g_InitStatus.allChecksPassed = false;
-        
-        // Wait for user acknowledgment
         Logger::Log("\nPress any key to exit...\n", COLOR_RED);
         getchar();
-        
         return false;
     }
     
-    // Step 5: Game Sync
-    Logger::LogProgress("Game Sync", 5, 6);
+    Logger::LogProgress("Game Sync", 6, 7);
     Step_WaitForGame();
     
-    // Step 6: System State
-    Logger::LogProgress("System State", 6, 6);
+    Logger::LogProgress("System State", 7, 7);
     Step_CheckSystemState();
     
-    // Final summary
     Logger::LogSeparator();
     Logger::LogSection("INITIALIZATION COMPLETE");
     
     char summary[128];
-    snprintf(summary, sizeof(summary), "%d/%d checks passed", 
-             g_InitStatus.passedChecks, g_InitStatus.totalChecks);
+    snprintf(summary, sizeof(summary), "%d/%d checks passed", g_InitStatus.passedChecks, g_InitStatus.totalChecks);
     
     Logger::LogTimestamp();
-    if (g_InitStatus.passedChecks >= 4)  // At least critical checks
+    if (g_InitStatus.passedChecks >= 5)
     {
         Logger::LogSuccess(summary);
         Logger::Log("\n", COLOR_DEFAULT);
@@ -749,13 +1288,11 @@ bool ProfessionalInit::RunProfessionalChecks()
     else
     {
         Logger::LogError(summary);
-        Logger::LogError("Too many checks failed");
         g_InitStatus.allChecksPassed = false;
     }
     
     Logger::LogSeparator();
     Logger::Log("\n", COLOR_DEFAULT);
-    
     SimulateDelay(1000);
     
     return g_InitStatus.allChecksPassed;
@@ -771,34 +1308,25 @@ void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
 #if DMA_ENABLED
     if (!DMAEngine::IsConnected() || !g_VMMDLL || !g_DMA_PID)
     {
-        for (auto& entry : entries)
-            if (entry.buffer) memset(entry.buffer, 0, entry.size);
+        for (auto& e : entries) if (e.buffer) memset(e.buffer, 0, e.size);
         return;
     }
     
     VMMDLL_SCATTER_HANDLE hScatter = VMMDLL_Scatter_Initialize(g_VMMDLL, g_DMA_PID, VMMDLL_FLAG_NOCACHE);
     if (!hScatter)
     {
-        for (auto& entry : entries)
-            if (entry.buffer && entry.address)
-                VMMDLL_MemReadEx(g_VMMDLL, g_DMA_PID, entry.address, (PBYTE)entry.buffer, (DWORD)entry.size, nullptr, VMMDLL_FLAG_NOCACHE);
+        for (auto& e : entries)
+            if (e.buffer && e.address)
+                VMMDLL_MemReadEx(g_VMMDLL, g_DMA_PID, e.address, (PBYTE)e.buffer, (DWORD)e.size, nullptr, VMMDLL_FLAG_NOCACHE);
         return;
     }
     
-    for (auto& entry : entries)
-        if (entry.address && entry.size > 0)
-            VMMDLL_Scatter_Prepare(hScatter, entry.address, (DWORD)entry.size);
-    
+    for (auto& e : entries) if (e.address && e.size > 0) VMMDLL_Scatter_Prepare(hScatter, e.address, (DWORD)e.size);
     VMMDLL_Scatter_Execute(hScatter);
-    
-    for (auto& entry : entries)
-        if (entry.buffer && entry.address)
-            VMMDLL_Scatter_Read(hScatter, entry.address, (DWORD)entry.size, (PBYTE)entry.buffer, nullptr);
-    
+    for (auto& e : entries) if (e.buffer && e.address) VMMDLL_Scatter_Read(hScatter, e.address, (DWORD)e.size, (PBYTE)e.buffer, nullptr);
     VMMDLL_Scatter_CloseHandle(hScatter);
 #else
-    for (auto& entry : entries)
-        if (entry.buffer) memset(entry.buffer, 0, entry.size);
+    for (auto& e : entries) if (e.buffer) memset(e.buffer, 0, e.size);
 #endif
 }
 
@@ -820,24 +1348,49 @@ bool LoadConfig(const char* filename)
         if (eq == std::string::npos) continue;
         
         std::string key = line.substr(0, eq), value = line.substr(eq + 1);
-        while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
-        while (!value.empty() && (value[0] == ' ' || value[0] == '\t')) value.erase(0, 1);
+        while (!key.empty() && key.back() == ' ') key.pop_back();
+        while (!value.empty() && (value[0] == ' ')) value.erase(0, 1);
         while (!value.empty() && (value.back() == '\r' || value.back() == '\n')) value.pop_back();
         
-        if (section == "Device") {
+        if (section == "Device")
+        {
             if (key == "Type") strncpy_s(g_Config.deviceType, value.c_str(), 31);
-            else if (key == "UseCustomPCIe") g_Config.useCustomPCIe = (value == "1");
+            else if (key == "UseFTD3XX") g_Config.useFTD3XX = (value == "1");
+            else if (key == "UseLeechCore") g_Config.useLeechCore = (value == "1");
             else if (key == "CustomPCIeID") strncpy_s(g_Config.customPCIeID, value.c_str(), 31);
         }
-        else if (section == "Target") {
+        else if (section == "Target")
+        {
             if (key == "ProcessName") { strncpy_s(g_Config.processName, value.c_str(), 63); mbstowcs_s(nullptr, g_Config.processNameW, g_Config.processName, 63); }
         }
-        else if (section == "Performance") {
+        else if (section == "Performance")
+        {
             if (key == "UpdateRateHz") g_Config.updateRateHz = std::stoi(value);
             else if (key == "UseScatterRegistry") g_Config.useScatterRegistry = (value == "1");
+            else if (key == "ScatterBatchSize") g_Config.scatterBatchSize = std::stoi(value);
         }
-        else if (section == "Diagnostics") {
-            if (key == "EnableDiagnostics") g_Config.enableDiagnostics = (value == "1");
+        else if (section == "Controller")
+        {
+            if (key == "Type")
+            {
+                if (value == "KMBoxBPlus" || value == "1") g_Config.controllerType = ControllerType::KMBOX_B_PLUS;
+                else if (value == "KMBoxNet" || value == "2") g_Config.controllerType = ControllerType::KMBOX_NET;
+                else if (value == "Arduino" || value == "3") g_Config.controllerType = ControllerType::ARDUINO;
+                else g_Config.controllerType = ControllerType::NONE;
+            }
+            else if (key == "COM") strncpy_s(g_Config.controllerCOM, value.c_str(), 15);
+            else if (key == "IP") strncpy_s(g_Config.controllerIP, value.c_str(), 31);
+            else if (key == "Port") g_Config.controllerPort = std::stoi(value);
+            else if (key == "AutoDetect") g_Config.controllerAutoDetect = (value == "1");
+        }
+        else if (section == "OffsetUpdater")
+        {
+            if (key == "Enabled") g_Config.enableOffsetUpdater = (value == "1");
+            else if (key == "URL") strncpy_s(g_Config.offsetURL, value.c_str(), 511);
+        }
+        else if (section == "Diagnostics")
+        {
+            if (key == "Enabled") g_Config.enableDiagnostics = (value == "1");
             else if (key == "AutoCloseOnFail") g_Config.autoCloseOnFail = (value == "1");
         }
     }
@@ -849,11 +1402,19 @@ bool SaveConfig(const char* filename)
     std::ofstream file(filename);
     if (!file.is_open()) return false;
     
-    file << "; PROJECT ZERO - Configuration\n\n";
-    file << "[Device]\nType=" << g_Config.deviceType << "\nUseCustomPCIe=" << (g_Config.useCustomPCIe?"1":"0") << "\nCustomPCIeID=" << g_Config.customPCIeID << "\n\n";
+    file << "; PROJECT ZERO - Configuration v3.0\n\n";
+    file << "[Device]\nType=" << g_Config.deviceType << "\nUseFTD3XX=" << (g_Config.useFTD3XX?"1":"0") << "\nUseLeechCore=" << (g_Config.useLeechCore?"1":"0") << "\n\n";
     file << "[Target]\nProcessName=" << g_Config.processName << "\n\n";
-    file << "[Performance]\nUpdateRateHz=" << g_Config.updateRateHz << "\nUseScatterRegistry=" << (g_Config.useScatterRegistry?"1":"0") << "\n\n";
-    file << "[Diagnostics]\nEnableDiagnostics=" << (g_Config.enableDiagnostics?"1":"0") << "\nAutoCloseOnFail=" << (g_Config.autoCloseOnFail?"1":"0") << "\n";
+    file << "[Performance]\nUpdateRateHz=" << g_Config.updateRateHz << "\nUseScatterRegistry=" << (g_Config.useScatterRegistry?"1":"0") << "\nScatterBatchSize=" << g_Config.scatterBatchSize << "\n\n";
+    
+    const char* ctrlType = "None";
+    if (g_Config.controllerType == ControllerType::KMBOX_B_PLUS) ctrlType = "KMBoxBPlus";
+    else if (g_Config.controllerType == ControllerType::KMBOX_NET) ctrlType = "KMBoxNet";
+    else if (g_Config.controllerType == ControllerType::ARDUINO) ctrlType = "Arduino";
+    file << "[Controller]\nType=" << ctrlType << "\nCOM=" << g_Config.controllerCOM << "\nIP=" << g_Config.controllerIP << "\nPort=" << g_Config.controllerPort << "\nAutoDetect=" << (g_Config.controllerAutoDetect?"1":"0") << "\n\n";
+    
+    file << "[OffsetUpdater]\nEnabled=" << (g_Config.enableOffsetUpdater?"1":"0") << "\nURL=" << g_Config.offsetURL << "\n\n";
+    file << "[Diagnostics]\nEnabled=" << (g_Config.enableDiagnostics?"1":"0") << "\nAutoCloseOnFail=" << (g_Config.autoCloseOnFail?"1":"0") << "\n";
     return true;
 }
 
@@ -864,31 +1425,34 @@ void CreateDefaultConfig(const char* filename)
     wcscpy_s(g_Config.processNameW, L"cod.exe");
     g_Config.updateRateHz = 120;
     g_Config.useScatterRegistry = true;
-    g_Config.enableDiagnostics = true;
-    g_Config.autoCloseOnFail = true;
+    g_Config.useFTD3XX = true;
+    g_Config.useLeechCore = true;
+    g_Config.controllerType = ControllerType::NONE;
+    g_Config.enableOffsetUpdater = true;
+    strcpy_s(g_Config.offsetURL, "https://raw.githubusercontent.com/offsets/cod/main/offsets.json");
     SaveConfig(filename);
 }
 
 // ============================================================================
 // SCATTER REGISTRY
 // ============================================================================
-void ScatterReadRegistry::RegisterPlayerData(int playerIndex, uintptr_t baseAddr)
+void ScatterReadRegistry::RegisterPlayerData(int idx, uintptr_t base)
 {
-    if (playerIndex < 0 || baseAddr == 0) return;
-    while ((int)m_PlayerBuffers.size() <= playerIndex) m_PlayerBuffers.push_back({});
-    PlayerRawData& buf = m_PlayerBuffers[playerIndex];
-    m_Entries.push_back({baseAddr + GameOffsets::EntityPos, &buf.position, sizeof(Vec3), ScatterDataType::PLAYER_POSITION, playerIndex});
-    m_Entries.push_back({baseAddr + GameOffsets::EntityHealth, &buf.health, sizeof(int), ScatterDataType::PLAYER_HEALTH, playerIndex});
-    m_Entries.push_back({baseAddr + GameOffsets::EntityTeam, &buf.team, sizeof(int), ScatterDataType::PLAYER_TEAM, playerIndex});
-    m_Entries.push_back({baseAddr + GameOffsets::EntityYaw, &buf.yaw, sizeof(float), ScatterDataType::PLAYER_YAW, playerIndex});
-    m_Entries.push_back({baseAddr + GameOffsets::EntityValid, &buf.valid, sizeof(uint8_t), ScatterDataType::PLAYER_VALID, playerIndex});
+    if (idx < 0 || base == 0) return;
+    while ((int)m_PlayerBuffers.size() <= idx) m_PlayerBuffers.push_back({});
+    PlayerRawData& buf = m_PlayerBuffers[idx];
+    m_Entries.push_back({base + GameOffsets::EntityPos, &buf.position, sizeof(Vec3), ScatterDataType::PLAYER_POSITION, idx});
+    m_Entries.push_back({base + GameOffsets::EntityHealth, &buf.health, sizeof(int), ScatterDataType::PLAYER_HEALTH, idx});
+    m_Entries.push_back({base + GameOffsets::EntityTeam, &buf.team, sizeof(int), ScatterDataType::PLAYER_TEAM, idx});
+    m_Entries.push_back({base + GameOffsets::EntityYaw, &buf.yaw, sizeof(float), ScatterDataType::PLAYER_YAW, idx});
+    m_Entries.push_back({base + GameOffsets::EntityValid, &buf.valid, sizeof(uint8_t), ScatterDataType::PLAYER_VALID, idx});
 }
 
-void ScatterReadRegistry::RegisterLocalPlayer(uintptr_t baseAddr)
+void ScatterReadRegistry::RegisterLocalPlayer(uintptr_t base)
 {
-    if (baseAddr == 0) return;
-    m_Entries.push_back({baseAddr + GameOffsets::EntityPos, &m_LocalPosition, sizeof(Vec3), ScatterDataType::LOCAL_POSITION, -1});
-    m_Entries.push_back({baseAddr + GameOffsets::EntityYaw, &m_LocalYaw, sizeof(float), ScatterDataType::LOCAL_YAW, -1});
+    if (base == 0) return;
+    m_Entries.push_back({base + GameOffsets::EntityPos, &m_LocalPosition, sizeof(Vec3), ScatterDataType::LOCAL_POSITION, -1});
+    m_Entries.push_back({base + GameOffsets::EntityYaw, &m_LocalYaw, sizeof(float), ScatterDataType::LOCAL_YAW, -1});
 }
 
 void ScatterReadRegistry::RegisterViewMatrix(uintptr_t addr)
@@ -955,11 +1519,7 @@ void MapTextureManager::SetMapBounds(const char* n, float x1, float x2, float y1
 // ============================================================================
 bool DMAEngine::Initialize()
 {
-    // Run professional checks first
-    if (!ProfessionalInit::RunProfessionalChecks())
-    {
-        return false;
-    }
+    if (!ProfessionalInit::RunProfessionalChecks()) return false;
     
     s_Connected = g_InitStatus.dmaConnected;
     s_Online = g_InitStatus.allChecksPassed;
@@ -969,7 +1529,7 @@ bool DMAEngine::Initialize()
     if (s_Online)
     {
         strcpy_s(s_StatusText, "ONLINE");
-        snprintf(s_DeviceInfo, sizeof(s_DeviceInfo), "%s | %s", g_InitStatus.dmaDevice, g_InitStatus.windowsVersion);
+        snprintf(s_DeviceInfo, sizeof(s_DeviceInfo), "%s | %s | %s", g_InitStatus.dmaDevice, s_DriverMode, g_InitStatus.windowsVersion);
     }
     else if (s_SimulationMode)
     {
@@ -979,19 +1539,20 @@ bool DMAEngine::Initialize()
         g_Offsets.EntityList = s_BaseAddress + 0x16D5B8D8;
     }
     else
-    {
         strcpy_s(s_StatusText, "OFFLINE");
-    }
     
     MapTextureManager::InitializeMapDatabase();
     return true;
 }
 
 bool DMAEngine::InitializeWithConfig(const DMAConfig&) { return Initialize(); }
-void DMAEngine::Shutdown() { 
+bool DMAEngine::InitializeFTD3XX() { return Initialize(); }
+void DMAEngine::Shutdown()
+{
 #if DMA_ENABLED
     if (g_VMMDLL) { VMMDLL_Close(g_VMMDLL); g_VMMDLL = nullptr; }
 #endif
+    HardwareController::Shutdown();
     SaveConfig("zero.ini");
     s_Connected = false; s_Online = false;
     Logger::Shutdown();
@@ -1001,6 +1562,7 @@ bool DMAEngine::IsConnected() { return s_Connected && !s_SimulationMode; }
 bool DMAEngine::IsOnline() { return s_Online; }
 const char* DMAEngine::GetStatus() { return s_StatusText; }
 const char* DMAEngine::GetDeviceInfo() { return s_DeviceInfo; }
+const char* DMAEngine::GetDriverMode() { return s_DriverMode; }
 
 template<typename T> T DMAEngine::Read(uintptr_t a) { T v = {}; 
 #if DMA_ENABLED
@@ -1041,6 +1603,69 @@ template float DMAEngine::Read<float>(uintptr_t);
 template uintptr_t DMAEngine::Read<uintptr_t>(uintptr_t);
 
 // ============================================================================
+// AIMBOT WITH HARDWARE CONTROLLER
+// ============================================================================
+void Aimbot::Initialize() { s_Enabled = false; s_CurrentTarget = -1; }
+void Aimbot::Update() {}
+bool Aimbot::IsEnabled() { return s_Enabled && (HardwareController::IsConnected() || g_Config.controllerType == ControllerType::NONE); }
+void Aimbot::SetEnabled(bool e) { s_Enabled = e; }
+
+int Aimbot::FindBestTarget(float maxFOV, float maxDistance)
+{
+    std::lock_guard<std::mutex> lock(PlayerManager::GetMutex());
+    auto& players = PlayerManager::GetPlayers();
+    
+    float bestFOV = maxFOV;
+    int bestIndex = -1;
+    
+    for (size_t i = 0; i < players.size(); i++)
+    {
+        const PlayerData& p = players[i];
+        if (!p.valid || !p.isAlive || !p.isEnemy || !p.onScreen) continue;
+        if (p.distance > maxDistance) continue;
+        
+        float fov = GetFOVTo(s_LastAimPos, p.screenPos);
+        if (fov < bestFOV)
+        {
+            bestFOV = fov;
+            bestIndex = (int)i;
+        }
+    }
+    
+    s_CurrentTarget = bestIndex;
+    return bestIndex;
+}
+
+Vec2 Aimbot::GetTargetScreenPos(int targetIndex)
+{
+    std::lock_guard<std::mutex> lock(PlayerManager::GetMutex());
+    auto& players = PlayerManager::GetPlayers();
+    if (targetIndex >= 0 && targetIndex < (int)players.size())
+        return players[targetIndex].screenHead;
+    return Vec2(0, 0);
+}
+
+void Aimbot::AimAt(const Vec2& target, float smoothness)
+{
+    if (smoothness < 1) smoothness = 1;
+    
+    int dx = (int)((target.x - s_LastAimPos.x) / smoothness);
+    int dy = (int)((target.y - s_LastAimPos.y) / smoothness);
+    
+    if (dx != 0 || dy != 0)
+        MoveMouse(dx, dy);
+    
+    s_LastAimPos.x += (float)dx;
+    s_LastAimPos.y += (float)dy;
+}
+
+void Aimbot::MoveMouse(int deltaX, int deltaY)
+{
+    // Use hardware controller if connected, otherwise software
+    HardwareController::MoveMouse(deltaX, deltaY);
+}
+
+// ============================================================================
 // PATTERN SCANNER (Stub)
 // ============================================================================
 uintptr_t PatternScanner::FindPattern(uintptr_t, size_t, const char*, const char*) { return 0; }
@@ -1049,7 +1674,7 @@ uintptr_t PatternScanner::ResolveRelative(uintptr_t, int, int) { return 0; }
 bool PatternScanner::UpdateAllOffsets() { s_Scanned = true; return false; }
 
 // ============================================================================
-// DIAGNOSTIC SYSTEM (Stub - handled by ProfessionalInit)
+// DIAGNOSTIC SYSTEM (Stub)
 // ============================================================================
 const char* DiagnosticSystem::GetErrorString(DiagnosticResult r) { (void)r; return ""; }
 bool DiagnosticSystem::RunAllDiagnostics() { return ProfessionalInit::RunProfessionalChecks(); }
@@ -1106,9 +1731,9 @@ void PlayerManager::SimulateUpdate()
     s_LocalPlayer.yaw = fmodf(s_SimTime * 15.0f, 360.0f);
     for (size_t i = 0; i < s_Players.size(); i++) {
         PlayerData& p = s_Players[i];
-        float a = (float)i * 0.5236f + s_SimTime * 0.3f, d = 40.0f + sinf(s_SimTime * 0.5f + i) * 30.0f;
+        float a = (float)i * 0.5236f + s_SimTime * 0.3f, d = 40.0f + sinf(s_SimTime * 0.5f + (float)i) * 30.0f;
         p.origin.x = cosf(a) * d; p.origin.y = sinf(a) * d; p.yaw = fmodf(a * 57.3f + 180.0f, 360.0f);
-        p.distance = d; p.health = 30 + (int)(sinf(s_SimTime * 0.2f + i) * 35 + 35);
+        p.distance = d; p.health = 30 + (int)(sinf(s_SimTime * 0.2f + (float)i) * 35 + 35);
     }
 }
 

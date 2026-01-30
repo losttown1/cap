@@ -1,5 +1,5 @@
-// DMA_Engine.hpp - Professional DMA Engine
-// Features: Professional Logging, Pre-Launch Diagnostics, Scatter Registry
+// DMA_Engine.hpp - Professional DMA Engine v3.0
+// Features: Hardware Controllers, Auto-Offset Updater, FTD3XX Driver, Scatter Registry
 
 #pragma once
 
@@ -15,6 +15,8 @@
 // DMA CONFIGURATION
 // ============================================================================
 #define DMA_ENABLED 1
+#define USE_FTD3XX 1           // Use FTD3XX driver for maximum speed
+#define USE_LIBCURL 0          // Set to 1 if libcurl is available
 
 // ============================================================================
 // CONSOLE COLORS (Windows)
@@ -31,26 +33,153 @@ enum ConsoleColor {
 };
 
 // ============================================================================
+// HARDWARE CONTROLLER TYPES
+// ============================================================================
+enum class ControllerType {
+    NONE = 0,
+    KMBOX_B_PLUS,      // KMBox B+ via COM port
+    KMBOX_NET,         // KMBox Net via TCP/IP
+    ARDUINO            // Arduino via COM port
+};
+
+const char* ControllerTypeToString(ControllerType type);
+
+// ============================================================================
+// HARDWARE CONTROLLER CONFIG
+// ============================================================================
+struct ControllerConfig {
+    ControllerType type = ControllerType::NONE;
+    
+    // COM port settings (for KMBox B+ and Arduino)
+    char comPort[16] = "COM3";
+    int baudRate = 115200;
+    bool autoDetectCOM = true;
+    
+    // Network settings (for KMBox Net)
+    char ipAddress[32] = "192.168.2.188";
+    int port = 8888;
+    
+    // Connection state
+    bool isConnected = false;
+    char deviceName[64] = "None";
+    
+    // Movement settings
+    float sensitivity = 1.0f;
+    int moveDelay = 1;  // ms between moves
+};
+
+extern ControllerConfig g_ControllerConfig;
+
+// ============================================================================
+// HARDWARE CONTROLLER CLASS
+// ============================================================================
+class HardwareController {
+public:
+    static bool Initialize();
+    static void Shutdown();
+    static bool IsConnected();
+    static const char* GetDeviceName();
+    static ControllerType GetType();
+    
+    // Mouse movement through hardware
+    static bool MoveMouse(int deltaX, int deltaY);
+    static bool Click(int button);  // 0=left, 1=right, 2=middle
+    static bool Press(int button);
+    static bool Release(int button);
+    
+    // Keyboard (for Arduino)
+    static bool KeyPress(int keyCode);
+    static bool KeyRelease(int keyCode);
+    
+    // Connection methods
+    static bool ConnectKMBoxBPlus(const char* comPort, int baudRate);
+    static bool ConnectKMBoxNet(const char* ip, int port);
+    static bool ConnectArduino(const char* comPort, int baudRate);
+    static bool ScanCOMPorts(std::vector<std::string>& foundPorts);
+    static bool AutoDetectDevice();
+    
+private:
+    static void* s_Handle;
+    static void* s_Socket;
+    static bool s_Connected;
+    static ControllerType s_Type;
+    static char s_DeviceName[64];
+    
+    // Serial communication
+    static bool SerialWrite(const char* data, int len);
+    static bool SerialRead(char* buffer, int maxLen, int* bytesRead);
+    
+    // Network communication
+    static bool SocketSend(const char* data, int len);
+    static bool SocketReceive(char* buffer, int maxLen, int* bytesReceived);
+};
+
+// ============================================================================
+// AUTO-OFFSET UPDATER
+// ============================================================================
+struct RemoteOffsets {
+    char gameVersion[32] = "";
+    char buildNumber[32] = "";
+    char lastUpdate[32] = "";
+    
+    uintptr_t ClientInfo = 0;
+    uintptr_t EntityList = 0;
+    uintptr_t ViewMatrix = 0;
+    uintptr_t PlayerBase = 0;
+    uintptr_t Refdef = 0;
+    uintptr_t BoneMatrix = 0;
+    uintptr_t WeaponInfo = 0;
+    
+    bool valid = false;
+};
+
+class OffsetUpdater {
+public:
+    static bool FetchRemoteOffsets(const char* url);
+    static bool ParseOffsetsJSON(const char* jsonData);
+    static bool ParseOffsetsINI(const char* iniData);
+    static bool ApplyOffsets(const RemoteOffsets& offsets);
+    static RemoteOffsets& GetLastOffsets() { return s_LastOffsets; }
+    static bool IsUpdated() { return s_Updated; }
+    static const char* GetBuildNumber() { return s_LastOffsets.buildNumber; }
+    
+    // URL configuration
+    static void SetOffsetURL(const char* url);
+    static const char* GetOffsetURL() { return s_OffsetURL; }
+    
+private:
+    static RemoteOffsets s_LastOffsets;
+    static bool s_Updated;
+    static char s_OffsetURL[512];
+    
+    // HTTP functions (using libcurl or WinHTTP)
+    static bool HttpGet(const char* url, std::string& response);
+};
+
+// ============================================================================
 // INITIALIZATION STATUS
 // ============================================================================
 struct InitStatus {
     bool loginSuccess = false;
     bool configLoaded = false;
     bool hardwareConnected = false;
-    bool arduinoConnected = false;
-    bool kmboxConnected = false;
+    bool controllerConnected = false;
     bool dmaConnected = false;
     bool mmapPresent = false;
     bool gameFound = false;
     bool keyboardReady = false;
     bool mouseReady = false;
+    bool offsetsUpdated = false;
     bool allChecksPassed = false;
     
     char windowsVersion[64] = {0};
     char userName[64] = {0};
     char configName[64] = {0};
     char dmaDevice[64] = {0};
+    char dmaDriver[32] = {0};
     char gameProcess[64] = {0};
+    char controllerName[64] = {0};
+    char gameBuild[32] = {0};
     
     int totalChecks = 0;
     int passedChecks = 0;
@@ -73,6 +202,8 @@ enum class DiagnosticResult {
     PROCESS_NOT_FOUND,
     BASE_ADDRESS_FAIL,
     MEMORY_READ_FAIL,
+    CONTROLLER_FAIL,
+    NETWORK_FAIL,
     UNKNOWN_ERROR
 };
 
@@ -92,6 +223,7 @@ struct DiagnosticStatus {
     char deviceName[64] = {0};
     char firmwareVersion[32] = {0};
     char deviceID[32] = {0};
+    char driverMode[32] = {0};
     bool isGenericID = false;
     bool isLeakedID = false;
     
@@ -109,19 +241,25 @@ extern DiagnosticStatus g_DiagStatus;
 // CONFIG STRUCTURE
 // ============================================================================
 struct DMAConfig {
+    // Device settings
     char deviceType[32] = "fpga";
     char deviceArg[64] = "";
     char deviceAlgo[16] = "0";
     bool useCustomPCIe = false;
     char customPCIeID[32] = "";
+    bool useFTD3XX = true;
+    bool useLeechCore = true;
     
+    // Target process
     char processName[64] = "cod.exe";
     wchar_t processNameW[64] = L"cod.exe";
     
+    // Performance
     int scatterBatchSize = 128;
     int updateRateHz = 120;
     bool useScatterRegistry = true;
     
+    // Diagnostics
     bool enableDiagnostics = true;
     bool autoCloseOnFail = true;
     float minSpeedMBps = 50.0f;
@@ -129,6 +267,18 @@ struct DMAConfig {
     bool warnGenericID = true;
     bool warnLeakedID = true;
     
+    // Controller
+    ControllerType controllerType = ControllerType::NONE;
+    char controllerCOM[16] = "COM3";
+    char controllerIP[32] = "192.168.2.188";
+    int controllerPort = 8888;
+    bool controllerAutoDetect = true;
+    
+    // Auto-Offset Updater
+    bool enableOffsetUpdater = true;
+    char offsetURL[512] = "https://raw.githubusercontent.com/offsets/cod/main/offsets.json";
+    
+    // Map texture
     char mapImagePath[256] = "";
     float mapScaleX = 1.0f;
     float mapScaleY = 1.0f;
@@ -136,6 +286,7 @@ struct DMAConfig {
     float mapOffsetY = 0.0f;
     float mapRotation = 0.0f;
     
+    // Debug
     bool debugMode = false;
     bool logReads = false;
 };
@@ -154,7 +305,6 @@ public:
     static void Initialize();
     static void Shutdown();
     
-    // Logging with colors and timestamps
     static void Log(const char* message, ConsoleColor color = COLOR_DEFAULT);
     static void LogSuccess(const char* message);
     static void LogError(const char* message);
@@ -163,13 +313,11 @@ public:
     static void LogStatus(const char* label, const char* value, bool success);
     static void LogProgress(const char* message, int current, int total);
     
-    // Special formatted logs
     static void LogBanner();
     static void LogSection(const char* title);
     static void LogSeparator();
     static void LogTimestamp();
     
-    // Animation
     static void LogSpinner(const char* message, int frame);
     static void ClearLine();
     
@@ -184,25 +332,21 @@ private:
 // ============================================================================
 class ProfessionalInit {
 public:
-    // Main initialization function - returns true if all checks pass
     static bool RunProfessionalChecks();
     
-    // Individual check steps
     static bool Step_LoginSequence();
     static bool Step_LoadConfig();
-    static bool Step_HardwareHandshake();
+    static bool Step_CheckOffsetUpdates();
+    static bool Step_ConnectController();
     static bool Step_ConnectDMA();
     static bool Step_WaitForGame();
     static bool Step_CheckSystemState();
     
-    // Get initialization status
     static InitStatus& GetStatus() { return g_InitStatus; }
     static bool IsReady() { return g_InitStatus.allChecksPassed; }
     
 private:
     static void SimulateDelay(int ms);
-    static bool CheckArduinoConnection();
-    static bool CheckKMBoxConnection();
     static bool CheckDMAConnection();
     static bool CheckMemoryMap();
     static void GetWindowsVersion(char* buffer, size_t size);
@@ -236,6 +380,8 @@ struct GameOffsets {
     uintptr_t EntityList = 0;
     uintptr_t ViewMatrix = 0;
     uintptr_t Refdef = 0;
+    uintptr_t BoneMatrix = 0;
+    uintptr_t WeaponInfo = 0;
     
     static constexpr uintptr_t EntitySize = 0x568;
     static constexpr uintptr_t EntityPos = 0x138;
@@ -417,11 +563,13 @@ class DMAEngine {
 public:
     static bool Initialize();
     static bool InitializeWithConfig(const DMAConfig& config);
+    static bool InitializeFTD3XX();
     static void Shutdown();
     static bool IsConnected();
     static bool IsOnline();
     static const char* GetStatus();
     static const char* GetDeviceInfo();
+    static const char* GetDriverMode();
     
     template<typename T>
     static T Read(uintptr_t address);
@@ -438,10 +586,36 @@ private:
     static bool s_Connected;
     static bool s_Online;
     static bool s_SimulationMode;
+    static bool s_UsingFTD3XX;
     static uintptr_t s_BaseAddress;
     static size_t s_ModuleSize;
     static char s_StatusText[64];
     static char s_DeviceInfo[128];
+    static char s_DriverMode[32];
+};
+
+// ============================================================================
+// AIMBOT WITH HARDWARE CONTROLLER
+// ============================================================================
+class Aimbot {
+public:
+    static void Initialize();
+    static void Update();
+    static bool IsEnabled();
+    static void SetEnabled(bool enabled);
+    
+    // Find best target
+    static int FindBestTarget(float maxFOV, float maxDistance);
+    static Vec2 GetTargetScreenPos(int targetIndex);
+    
+    // Move mouse (through hardware controller if connected)
+    static void AimAt(const Vec2& targetScreen, float smoothness);
+    static void MoveMouse(int deltaX, int deltaY);
+    
+private:
+    static bool s_Enabled;
+    static int s_CurrentTarget;
+    static Vec2 s_LastAimPos;
 };
 
 // ============================================================================

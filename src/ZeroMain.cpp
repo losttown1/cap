@@ -755,7 +755,7 @@ void RenderPerformance()
     if (!g_Settings.showPerformance) return;
     
     float px = 10;
-    float py = (float)g_ScreenH - 80;
+    float py = (float)g_ScreenH - 110;
     
     wchar_t buf[128];
     swprintf_s(buf, L"FPS: %.0f", g_FPS);
@@ -773,8 +773,20 @@ void RenderPerformance()
     DrawTextW2(deviceInfoW, px, py, Colors::Gray, g_FontSmall);
     
     py += 14;
-    swprintf_s(buf, L"Patterns: %d found", PatternScanner::GetFoundCount());
-    DrawTextW2(buf, px, py, PatternScanner::GetFoundCount() > 0 ? Colors::Green : Colors::Yellow, g_FontSmall);
+    wchar_t driverW[64];
+    swprintf_s(driverW, L"Driver: %S", DMAEngine::GetDriverMode());
+    DrawTextW2(driverW, px, py, g_Config.useFTD3XX ? Colors::Green : Colors::Yellow, g_FontSmall);
+    
+    py += 14;
+    wchar_t ctrlW[64];
+    swprintf_s(ctrlW, L"Controller: %S", HardwareController::GetDeviceName());
+    DrawTextW2(ctrlW, px, py, HardwareController::IsConnected() ? Colors::Green : Colors::Gray, g_FontSmall);
+    
+    py += 14;
+    swprintf_s(buf, L"Patterns: %d | Offsets: %s", 
+               PatternScanner::GetFoundCount(),
+               OffsetUpdater::IsUpdated() ? L"Remote" : L"Local");
+    DrawTextW2(buf, px, py, Colors::Yellow, g_FontSmall);
 }
 
 // ============================================================================
@@ -824,10 +836,31 @@ void RenderMenu()
     
     if (g_CurrentTab == 0)
     {
+        // Show controller status for aimbot
+        wchar_t ctrlW[64];
+        mbstowcs_s(nullptr, ctrlW, HardwareController::GetDeviceName(), 63);
+        DrawTextW2(L"Input Device:", ccx, ccy + line * lineH, Colors::Gray);
+        DrawTextW2(ctrlW, ccx + 120, ccy + line * lineH, 
+                   HardwareController::IsConnected() ? Colors::Green : Colors::Yellow); line++;
+        
+        // Warning if controller not connected but not None
+        if (g_Config.controllerType != ControllerType::NONE && !HardwareController::IsConnected())
+        {
+            DrawTextW2(L"[!] Controller not connected - Aimbot disabled", ccx, ccy + line * lineH, Colors::Red, g_FontSmall); line++;
+        }
+        
+        line++;
         Toggle(L"Enable Aimbot", &g_Settings.aimbotEnabled, ccx, ccy + line * lineH); line++;
         
         if (g_Settings.aimbotEnabled)
         {
+            // Check if aimbot can actually work
+            bool aimbotReady = Aimbot::IsEnabled();
+            if (!aimbotReady && g_Config.controllerType != ControllerType::NONE)
+            {
+                DrawTextW2(L"Aimbot disabled: No controller", ccx + 20, ccy + line * lineH, Colors::Red, g_FontSmall); line++;
+            }
+            
             line++;
             Slider(L"FOV", &g_Settings.aimbotFOV, 10, 300, L"%.0f", ccx, ccy + line * lineH, 1); line++;
             Slider(L"Smoothness", &g_Settings.aimbotSmooth, 1, 20, L"%.1f", ccx, ccy + line * lineH, 2); line++;
@@ -840,6 +873,17 @@ void RenderMenu()
             line++;
             Toggle(L"Visibility Check", &g_Settings.aimbotVisCheck, ccx, ccy + line * lineH); line++;
             Toggle(L"Show FOV Circle", &g_Settings.aimbotShowFOV, ccx, ccy + line * lineH); line++;
+            
+            line++;
+            // Show input mode
+            if (g_Config.controllerType == ControllerType::NONE)
+            {
+                DrawTextW2(L"Mode: Software (mouse_event)", ccx, ccy + line * lineH, Colors::Yellow, g_FontSmall);
+            }
+            else
+            {
+                DrawTextW2(L"Mode: Hardware (Anti-cheat bypass)", ccx, ccy + line * lineH, Colors::Green, g_FontSmall);
+            }
         }
     }
     else if (g_CurrentTab == 1)
@@ -923,50 +967,86 @@ void RenderMenu()
     }
     else if (g_CurrentTab == 4)
     {
-        DrawTextW2(L"Configuration (zero.ini)", ccx, ccy + line * lineH, Colors::White); line++;
+        DrawTextW2(L"Configuration", ccx, ccy + line * lineH, Colors::White, g_FontBold); line++;
         line++;
         
+        // DMA Device Info
         wchar_t deviceW[128];
         mbstowcs_s(nullptr, deviceW, DMAEngine::GetDeviceInfo(), 127);
-        DrawTextW2(L"Device:", ccx, ccy + line * lineH, Colors::Gray);
-        DrawTextW2(deviceW, ccx + 80, ccy + line * lineH, Colors::White); line++;
+        DrawTextW2(L"DMA Device:", ccx, ccy + line * lineH, Colors::Gray);
+        DrawTextW2(deviceW, ccx + 100, ccy + line * lineH, Colors::White, g_FontSmall); line++;
         
-        wchar_t processW[64];
-        mbstowcs_s(nullptr, processW, g_Config.processName, 63);
-        DrawTextW2(L"Process:", ccx, ccy + line * lineH, Colors::Gray);
-        DrawTextW2(processW, ccx + 80, ccy + line * lineH, Colors::White); line++;
+        // Driver Mode
+        wchar_t driverW[32];
+        mbstowcs_s(nullptr, driverW, DMAEngine::GetDriverMode(), 31);
+        DrawTextW2(L"Driver:", ccx, ccy + line * lineH, Colors::Gray);
+        DrawTextW2(driverW, ccx + 100, ccy + line * lineH, g_Config.useFTD3XX ? Colors::Green : Colors::Yellow); line++;
         
         line++;
-        wchar_t buf[64];
-        swprintf_s(buf, L"Scatter Batch: %d", g_Config.scatterBatchSize);
-        DrawTextW2(buf, ccx, ccy + line * lineH, Colors::GrayLight); line++;
+        DrawTextW2(L"--- Hardware Controller ---", ccx, ccy + line * lineH, Colors::Red); line++;
         
+        // Controller Selection Combo
+        static int controllerIndex = (int)g_Config.controllerType;
+        const wchar_t* controllers[] = {L"None (Software)", L"KMBox B+", L"KMBox Net", L"Arduino"};
+        Combo(L"Controller", &controllerIndex, controllers, 4, ccx, ccy + line * lineH); line++;
+        
+        // Update config if changed
+        g_Config.controllerType = (ControllerType)controllerIndex;
+        
+        // Show connection status
+        wchar_t ctrlStatusW[64];
+        mbstowcs_s(nullptr, ctrlStatusW, HardwareController::GetDeviceName(), 63);
+        DrawTextW2(L"Status:", ccx, ccy + line * lineH, Colors::Gray);
+        DrawTextW2(ctrlStatusW, ccx + 100, ccy + line * lineH, 
+                   HardwareController::IsConnected() ? Colors::Green : Colors::Yellow); line++;
+        
+        // COM Port / IP settings based on controller type
+        if (g_Config.controllerType == ControllerType::KMBOX_NET)
+        {
+            wchar_t ipW[64];
+            swprintf_s(ipW, L"IP: %S:%d", g_Config.controllerIP, g_Config.controllerPort);
+            DrawTextW2(ipW, ccx + 20, ccy + line * lineH, Colors::GrayLight, g_FontSmall); line++;
+        }
+        else if (g_Config.controllerType == ControllerType::KMBOX_B_PLUS || 
+                 g_Config.controllerType == ControllerType::ARDUINO)
+        {
+            wchar_t comW[32];
+            swprintf_s(comW, L"COM Port: %S", g_Config.controllerCOM);
+            DrawTextW2(comW, ccx + 20, ccy + line * lineH, Colors::GrayLight, g_FontSmall); line++;
+        }
+        
+        line++;
+        DrawTextW2(L"--- Performance ---", ccx, ccy + line * lineH, Colors::Red); line++;
+        
+        wchar_t buf[64];
         swprintf_s(buf, L"Update Rate: %d Hz", g_Config.updateRateHz);
         DrawTextW2(buf, ccx, ccy + line * lineH, Colors::GrayLight); line++;
         
         swprintf_s(buf, L"Scatter Registry: %s", g_Config.useScatterRegistry ? L"ON" : L"OFF");
         DrawTextW2(buf, ccx, ccy + line * lineH, g_Config.useScatterRegistry ? Colors::Green : Colors::Gray); line++;
         
-        line++;
-        swprintf_s(buf, L"Patterns Found: %d / 5", PatternScanner::GetFoundCount());
-        DrawTextW2(buf, ccx, ccy + line * lineH, PatternScanner::GetFoundCount() > 3 ? Colors::Green : Colors::Yellow); line++;
+        swprintf_s(buf, L"FTD3XX Driver: %s", g_Config.useFTD3XX ? L"ON" : L"OFF");
+        DrawTextW2(buf, ccx, ccy + line * lineH, g_Config.useFTD3XX ? Colors::Green : Colors::Gray); line++;
         
         line++;
-        if (g_Config.mapImagePath[0])
+        DrawTextW2(L"--- Offset Updater ---", ccx, ccy + line * lineH, Colors::Red); line++;
+        
+        swprintf_s(buf, L"Auto-Update: %s", g_Config.enableOffsetUpdater ? L"ON" : L"OFF");
+        DrawTextW2(buf, ccx, ccy + line * lineH, g_Config.enableOffsetUpdater ? Colors::Green : Colors::Gray); line++;
+        
+        if (OffsetUpdater::IsUpdated())
         {
-            wchar_t mapW[256];
-            mbstowcs_s(nullptr, mapW, g_Config.mapImagePath, 255);
-            DrawTextW2(L"Map Image:", ccx, ccy + line * lineH, Colors::Gray);
-            DrawTextW2(mapW, ccx + 90, ccy + line * lineH, Colors::White, g_FontSmall); line++;
+            wchar_t buildW[64];
+            swprintf_s(buildW, L"Game Build: %S", OffsetUpdater::GetBuildNumber());
+            DrawTextW2(buildW, ccx, ccy + line * lineH, Colors::Green); line++;
         }
         else
         {
-            DrawTextW2(L"Map Image: Not configured", ccx, ccy + line * lineH, Colors::Gray); line++;
+            DrawTextW2(L"Offsets: Using local/pattern", ccx, ccy + line * lineH, Colors::Yellow, g_FontSmall); line++;
         }
         
         line++;
-        line++;
-        DrawTextW2(L"Edit zero.ini to change settings", ccx, ccy + line * lineH, Colors::Gray, g_FontSmall);
+        DrawTextW2(L"Edit zero.ini for advanced settings", ccx, ccy + line * lineH, Colors::Gray, g_FontSmall);
     }
     
     g_MouseClicked = false;

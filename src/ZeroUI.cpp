@@ -144,7 +144,7 @@ void RenderZeroMenu()
     ImGui::Spacing();
     
     // Tab bar
-    if (ImGui::BeginTabBar("##tabs", ImGuiTabBarFlags_None))
+    if (ImGui::BeginTabBar("##tabs", 0))
     {
         // RADAR TAB
         if (ImGui::BeginTabItem("RADAR"))

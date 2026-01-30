@@ -1,7 +1,8 @@
 // ZeroMain.cpp - Zero Elite Main Entry Point
 // DirectX 11 Transparent Overlay with ImGui
-// Fixed input handling with proper debouncing
+// FIXED: Input blocking, menu rendering, radar display
 
+#define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <d3d11.h>
 #include <dwmapi.h>
@@ -33,15 +34,18 @@ static HWND                     g_hWnd = nullptr;
 static bool                     g_bRunning = true;
 static WNDCLASSEXW              g_wc = {};
 
-// Input state tracking for debouncing
-static bool g_InsertKeyWasPressed = false;
-static bool g_EndKeyWasPressed = false;
-static ULONGLONG g_LastToggleTime = 0;
-const ULONGLONG DEBOUNCE_DELAY_MS = 200; // 200ms debounce
+// Overlay state
+static bool g_OverlayVisible = true;   // F1 to toggle ALL overlay
+static bool g_MenuVisible = true;      // INSERT to toggle menu only
+
+// Debounce
+static bool g_F1Pressed = false;
+static bool g_InsertPressed = false;
+static bool g_EndPressed = false;
 
 // Overlay configuration
-constexpr const wchar_t* WINDOW_CLASS_NAME = L"ZeroEliteOverlayClass";
-constexpr const wchar_t* WINDOW_TITLE = L"Zero Elite Overlay";
+constexpr const wchar_t* WINDOW_CLASS_NAME = L"ZeroOverlay";
+constexpr const wchar_t* WINDOW_TITLE = L"";
 
 // Function declarations
 bool CreateDeviceD3D(HWND hWnd);
@@ -49,13 +53,10 @@ void CleanupDeviceD3D();
 void CreateRenderTarget();
 void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-bool CreateOverlayWindow();
-void SetupWindowForOverlay(HWND hWnd);
 
 // Create DirectX 11 device and swap chain
 bool CreateDeviceD3D(HWND hWnd)
 {
-    // Setup swap chain description
     DXGI_SWAP_CHAIN_DESC sd = {};
     sd.BufferCount = 2;
     sd.BufferDesc.Width = 0;
@@ -71,35 +72,17 @@ bool CreateDeviceD3D(HWND hWnd)
     sd.Windowed = TRUE;
     sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 
-    UINT createDeviceFlags = 0;
-    #ifdef _DEBUG
-    createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
-    #endif
-
     D3D_FEATURE_LEVEL featureLevel;
-    const D3D_FEATURE_LEVEL featureLevelArray[] = { 
-        D3D_FEATURE_LEVEL_11_0, 
-        D3D_FEATURE_LEVEL_10_0 
-    };
-
+    const D3D_FEATURE_LEVEL featureLevelArray[] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0 };
+    
     HRESULT hr = D3D11CreateDeviceAndSwapChain(
-        nullptr,
-        D3D_DRIVER_TYPE_HARDWARE,
-        nullptr,
-        createDeviceFlags,
-        featureLevelArray,
-        2,
-        D3D11_SDK_VERSION,
-        &sd,
-        &g_pSwapChain,
-        &g_pd3dDevice,
-        &featureLevel,
-        &g_pd3dDeviceContext
+        nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
+        featureLevelArray, 2, D3D11_SDK_VERSION,
+        &sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext
     );
 
-    if (FAILED(hr))
-    {
-        std::cerr << "[Zero Elite] Failed to create D3D11 device. HRESULT: 0x" << std::hex << hr << std::endl;
+    if (FAILED(hr)) {
+        std::cerr << "[ERROR] D3D11CreateDeviceAndSwapChain failed: 0x" << std::hex << hr << std::endl;
         return false;
     }
 
@@ -107,384 +90,252 @@ bool CreateDeviceD3D(HWND hWnd)
     return true;
 }
 
-// Cleanup DirectX resources
 void CleanupDeviceD3D()
 {
     CleanupRenderTarget();
-    if (g_pSwapChain) 
-    { 
-        g_pSwapChain->Release(); 
-        g_pSwapChain = nullptr; 
-    }
-    if (g_pd3dDeviceContext) 
-    { 
-        g_pd3dDeviceContext->Release(); 
-        g_pd3dDeviceContext = nullptr; 
-    }
-    if (g_pd3dDevice) 
-    { 
-        g_pd3dDevice->Release(); 
-        g_pd3dDevice = nullptr; 
-    }
+    if (g_pSwapChain) { g_pSwapChain->Release(); g_pSwapChain = nullptr; }
+    if (g_pd3dDeviceContext) { g_pd3dDeviceContext->Release(); g_pd3dDeviceContext = nullptr; }
+    if (g_pd3dDevice) { g_pd3dDevice->Release(); g_pd3dDevice = nullptr; }
 }
 
-// Create render target view
 void CreateRenderTarget()
 {
     ID3D11Texture2D* pBackBuffer = nullptr;
     g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
-    if (pBackBuffer)
-    {
+    if (pBackBuffer) {
         g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_mainRenderTargetView);
         pBackBuffer->Release();
     }
 }
 
-// Cleanup render target
 void CleanupRenderTarget()
 {
-    if (g_mainRenderTargetView) 
-    { 
-        g_mainRenderTargetView->Release(); 
-        g_mainRenderTargetView = nullptr; 
-    }
+    if (g_mainRenderTargetView) { g_mainRenderTargetView->Release(); g_mainRenderTargetView = nullptr; }
 }
 
-// Setup window for transparent overlay
-void SetupWindowForOverlay(HWND hWnd)
+// Set window click-through state
+void SetClickThrough(bool clickThrough)
 {
-    // Make window transparent
-    MARGINS margins = { -1, -1, -1, -1 };
-    DwmExtendFrameIntoClientArea(hWnd, &margins);
-
-    // Set window to always on top
-    SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
-
-    // Set layered window attributes for click-through when menu is hidden
-    SetLayeredWindowAttributes(hWnd, RGB(0, 0, 0), 255, LWA_ALPHA);
-}
-
-// Create the overlay window
-bool CreateOverlayWindow()
-{
-    // Register window class
-    g_wc = {};
-    g_wc.cbSize = sizeof(WNDCLASSEXW);
-    g_wc.style = CS_HREDRAW | CS_VREDRAW;
-    g_wc.lpfnWndProc = WndProc;
-    g_wc.cbClsExtra = 0;
-    g_wc.cbWndExtra = 0;
-    g_wc.hInstance = GetModuleHandle(nullptr);
-    g_wc.hIcon = nullptr;
-    g_wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    g_wc.hbrBackground = nullptr;
-    g_wc.lpszMenuName = nullptr;
-    g_wc.lpszClassName = WINDOW_CLASS_NAME;
-    g_wc.hIconSm = nullptr;
-
-    if (!RegisterClassExW(&g_wc))
-    {
-        std::cerr << "[Zero Elite] Failed to register window class" << std::endl;
-        return false;
+    LONG_PTR exStyle = GetWindowLongPtrW(g_hWnd, GWL_EXSTYLE);
+    
+    if (clickThrough) {
+        exStyle |= WS_EX_TRANSPARENT;
+    } else {
+        exStyle &= ~WS_EX_TRANSPARENT;
     }
-
-    // Get screen dimensions
-    int screenWidth = GetSystemMetrics(SM_CXSCREEN);
-    int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-
-    // Create window - start WITHOUT WS_EX_TRANSPARENT since menu starts visible
-    // UpdateWindowClickthrough() will manage click-through mode
-    g_hWnd = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-        WINDOW_CLASS_NAME,
-        WINDOW_TITLE,
-        WS_POPUP,
-        0, 0,
-        screenWidth, screenHeight,
-        nullptr,
-        nullptr,
-        g_wc.hInstance,
-        nullptr
-    );
-
-    if (!g_hWnd)
-    {
-        std::cerr << "[Zero Elite] Failed to create overlay window" << std::endl;
-        UnregisterClassW(WINDOW_CLASS_NAME, g_wc.hInstance);
-        return false;
-    }
-
-    // Setup overlay transparency
-    SetupWindowForOverlay(g_hWnd);
-
-    // Show the window
-    ShowWindow(g_hWnd, SW_SHOWDEFAULT);
-    UpdateWindow(g_hWnd);
-
-    std::cout << "[Zero Elite] Overlay window created successfully" << std::endl;
-    std::cout << "[Zero Elite] Screen resolution: " << screenWidth << "x" << screenHeight << std::endl;
-
-    return true;
-}
-
-// Update window clickthrough state based on menu visibility
-void UpdateWindowClickthrough()
-{
-    if (IsZeroMenuVisible())
-    {
-        // Menu visible - allow input
-        SetWindowLongW(g_hWnd, GWL_EXSTYLE, 
-            WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW);
-    }
-    else
-    {
-        // Menu hidden - click through
-        SetWindowLongW(g_hWnd, GWL_EXSTYLE, 
-            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW);
-    }
+    
+    SetWindowLongPtrW(g_hWnd, GWL_EXSTYLE, exStyle);
 }
 
 // Window procedure
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    // Forward to ImGui
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
-    {
         return true;
-    }
 
-    switch (msg)
-    {
+    switch (msg) {
         case WM_SIZE:
-            if (g_pd3dDevice != nullptr && wParam != SIZE_MINIMIZED)
-            {
+            if (g_pd3dDevice && wParam != SIZE_MINIMIZED) {
                 CleanupRenderTarget();
-                g_pSwapChain->ResizeBuffers(0, 
-                    static_cast<UINT>(LOWORD(lParam)), 
-                    static_cast<UINT>(HIWORD(lParam)), 
-                    DXGI_FORMAT_UNKNOWN, 0);
+                g_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
                 CreateRenderTarget();
             }
             return 0;
-
-        case WM_SYSCOMMAND:
-            if ((wParam & 0xfff0) == SC_KEYMENU)
-            {
-                return 0;
-            }
-            break;
-
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
     }
-
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
-// Check if key was just pressed (with debouncing)
-bool IsKeyJustPressed(int vKey, bool& wasPressed, ULONGLONG& lastTime)
+// Simple key check with debounce
+bool KeyPressed(int vKey, bool& state)
 {
-    bool isPressed = (GetAsyncKeyState(vKey) & 0x8000) != 0;
-    ULONGLONG currentTime = GetTickCount64();
-    
-    if (isPressed && !wasPressed && (currentTime - lastTime) > DEBOUNCE_DELAY_MS)
-    {
-        wasPressed = true;
-        lastTime = currentTime;
+    bool down = (GetAsyncKeyState(vKey) & 0x8000) != 0;
+    if (down && !state) {
+        state = true;
         return true;
     }
-    else if (!isPressed)
-    {
-        wasPressed = false;
-    }
-    
+    if (!down) state = false;
     return false;
 }
 
 // Main entry point
-int APIENTRY wWinMain(
-    _In_ HINSTANCE hInstance,
-    _In_opt_ HINSTANCE hPrevInstance,
-    _In_ LPWSTR lpCmdLine,
-    _In_ int nCmdShow)
+int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
 {
-    UNREFERENCED_PARAMETER(hInstance);
-    UNREFERENCED_PARAMETER(hPrevInstance);
-    UNREFERENCED_PARAMETER(lpCmdLine);
-    UNREFERENCED_PARAMETER(nCmdShow);
-
-    // Allocate console for debug output
+    // Console for debugging
     AllocConsole();
-    FILE* pFile = nullptr;
-    freopen_s(&pFile, "CONOUT$", "w", stdout);
-    freopen_s(&pFile, "CONOUT$", "w", stderr);
+    FILE* f; freopen_s(&f, "CONOUT$", "w", stdout); freopen_s(&f, "CONOUT$", "w", stderr);
 
-    std::cout << "========================================" << std::endl;
-    std::cout << "   PROJECT ZERO - BO6 Radar Overlay    " << std::endl;
-    std::cout << "========================================" << std::endl;
+    std::cout << "============================================" << std::endl;
+    std::cout << "   PROJECT ZERO - BO6 Radar Overlay" << std::endl;
+    std::cout << "============================================" << std::endl;
+    std::cout << std::endl;
+    std::cout << "CONTROLS:" << std::endl;
+    std::cout << "  F1     = Hide/Show ALL overlay" << std::endl;
+    std::cout << "  INSERT = Hide/Show menu only" << std::endl;
+    std::cout << "  END    = Exit program" << std::endl;
     std::cout << std::endl;
 
-    // Create overlay window
-    if (!CreateOverlayWindow())
-    {
-        MessageBoxW(nullptr, L"Failed to create overlay window", L"Zero Elite Error", MB_ICONERROR);
+    // Register window class
+    g_wc.cbSize = sizeof(WNDCLASSEXW);
+    g_wc.style = CS_HREDRAW | CS_VREDRAW;
+    g_wc.lpfnWndProc = WndProc;
+    g_wc.hInstance = hInstance;
+    g_wc.lpszClassName = WINDOW_CLASS_NAME;
+    RegisterClassExW(&g_wc);
+
+    // Get screen size
+    int screenW = GetSystemMetrics(SM_CXSCREEN);
+    int screenH = GetSystemMetrics(SM_CYSCREEN);
+
+    // Create transparent overlay window
+    g_hWnd = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TOOLWINDOW,
+        WINDOW_CLASS_NAME, WINDOW_TITLE,
+        WS_POPUP,
+        0, 0, screenW, screenH,
+        nullptr, nullptr, hInstance, nullptr
+    );
+
+    if (!g_hWnd) {
+        std::cerr << "[ERROR] CreateWindowExW failed" << std::endl;
         return 1;
     }
 
-    // Initialize DirectX 11
-    if (!CreateDeviceD3D(g_hWnd))
-    {
+    // Make window transparent
+    SetLayeredWindowAttributes(g_hWnd, RGB(0, 0, 0), 0, LWA_COLORKEY);
+    
+    // Extend frame into client area for transparency
+    MARGINS margins = { -1 };
+    DwmExtendFrameIntoClientArea(g_hWnd, &margins);
+
+    ShowWindow(g_hWnd, SW_SHOWDEFAULT);
+    UpdateWindow(g_hWnd);
+
+    std::cout << "[OK] Window created: " << screenW << "x" << screenH << std::endl;
+
+    // Initialize DirectX
+    if (!CreateDeviceD3D(g_hWnd)) {
         CleanupDeviceD3D();
-        DestroyWindow(g_hWnd);
-        UnregisterClassW(WINDOW_CLASS_NAME, g_wc.hInstance);
-        MessageBoxW(nullptr, L"Failed to create DirectX 11 device", L"Zero Elite Error", MB_ICONERROR);
+        UnregisterClassW(WINDOW_CLASS_NAME, hInstance);
         return 1;
     }
-
-    std::cout << "[Zero Elite] DirectX 11 initialized successfully" << std::endl;
+    std::cout << "[OK] DirectX 11 initialized" << std::endl;
 
     // Initialize ImGui
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    io.IniFilename = nullptr;  // Disable imgui.ini file
+    io.IniFilename = nullptr;
+    
+    // Set display size
+    io.DisplaySize = ImVec2((float)screenW, (float)screenH);
 
-    std::cout << "[Zero Elite] ImGui context created" << std::endl;
-
-    // Setup Platform/Renderer backends
     ImGui_ImplWin32_Init(g_hWnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
+    
+    std::cout << "[OK] ImGui initialized" << std::endl;
 
-    // Initialize Zero Elite UI
+    // Initialize UI and DMA
     InitializeZeroUI();
     
-    // Update window style since menu starts visible
-    UpdateWindowClickthrough();
-
-    // Initialize DMA Engine
-    if (InitializeZeroDMA())
-    {
-        std::cout << "[PROJECT ZERO] DMA Engine initialized" << std::endl;
-    }
-    else
-    {
-        std::cout << "[PROJECT ZERO] DMA Engine initialization failed" << std::endl;
-        std::cout << "[PROJECT ZERO] Running in overlay-only mode" << std::endl;
+    if (InitializeZeroDMA()) {
+        std::cout << "[OK] DMA initialized" << std::endl;
+    } else {
+        std::cout << "[WARN] DMA failed - overlay only mode" << std::endl;
     }
 
     std::cout << std::endl;
-    std::cout << "[Zero Elite] Overlay is now running!" << std::endl;
-    std::cout << "[Zero Elite] Press INSERT to toggle menu" << std::endl;
-    std::cout << "[Zero Elite] Press END to exit" << std::endl;
+    std::cout << ">>> Overlay running! Press F1 to toggle visibility <<<" << std::endl;
     std::cout << std::endl;
-
-    // Clear background color (transparent)
-    const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-
-    // Input state tracking
-    static ULONGLONG lastInsertToggle = 0;
-    static ULONGLONG lastEndToggle = 0;
 
     // Main loop
-    MSG msg = {};
+    MSG msg;
+    ZeroMemory(&msg, sizeof(msg));
+    
     while (g_bRunning)
     {
-        // Process Windows messages (non-blocking)
-        while (PeekMessageW(&msg, nullptr, 0U, 0U, PM_REMOVE))
-        {
+        // Process messages
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
-            if (msg.message == WM_QUIT)
-            {
-                g_bRunning = false;
-            }
+            if (msg.message == WM_QUIT) g_bRunning = false;
         }
+        if (!g_bRunning) break;
 
-        if (!g_bRunning)
-        {
-            break;
+        // Handle hotkeys
+        if (KeyPressed(VK_F1, g_F1Pressed)) {
+            g_OverlayVisible = !g_OverlayVisible;
+            std::cout << "[HOTKEY] Overlay: " << (g_OverlayVisible ? "VISIBLE" : "HIDDEN") << std::endl;
         }
-
-        // Handle INSERT key with proper debouncing
-        if (IsKeyJustPressed(VK_INSERT, g_InsertKeyWasPressed, lastInsertToggle))
-        {
-            ToggleZeroMenu();
-            UpdateWindowClickthrough();
-            std::cout << "[Zero Elite] Menu " << (IsZeroMenuVisible() ? "Opened" : "Closed") << std::endl;
+        
+        if (KeyPressed(VK_INSERT, g_InsertPressed)) {
+            g_MenuVisible = !g_MenuVisible;
+            std::cout << "[HOTKEY] Menu: " << (g_MenuVisible ? "OPEN" : "CLOSED") << std::endl;
         }
-
-        // Handle END key to exit
-        if (IsKeyJustPressed(VK_END, g_EndKeyWasPressed, lastEndToggle))
-        {
-            std::cout << "[Zero Elite] Exit requested" << std::endl;
+        
+        if (KeyPressed(VK_END, g_EndPressed)) {
+            std::cout << "[HOTKEY] Exit requested" << std::endl;
             g_bRunning = false;
             break;
         }
+
+        // Update click-through: menu visible = accept input, otherwise click-through
+        SetClickThrough(!g_MenuVisible || !g_OverlayVisible);
 
         // Start ImGui frame
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        // Render Zero Elite UI and Radar
-        RenderZeroMenu();
-        
-        // Render radar overlay (always visible if enabled)
-        extern void RenderRadarOverlay();
-        RenderRadarOverlay();
+        // Only render if overlay is visible
+        if (g_OverlayVisible)
+        {
+            // Draw radar (always if enabled)
+            if (esp_enabled) {
+                RenderRadarOverlay();
+            }
+            
+            // Draw menu if visible
+            if (g_MenuVisible) {
+                RenderZeroMenu();
+            }
+        }
 
-        // End ImGui frame
+        // End frame
         ImGui::EndFrame();
         ImGui::Render();
 
-        // Clear and render
+        // Render
+        const float clear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
-        g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clearColor);
-        
-        // Render ImGui draw data
+        g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-
-        // Present the frame
-        int refreshRate = static_cast<int>(refresh_rate);
-        if (refreshRate < 30) refreshRate = 30;
-        if (refreshRate > 240) refreshRate = 240;
         
-        UINT syncInterval = 1; // VSync on
-        g_pSwapChain->Present(syncInterval, 0);
-
-        // Small sleep to prevent CPU hogging
+        g_pSwapChain->Present(1, 0);
+        
         Sleep(1);
     }
 
-    std::cout << std::endl;
-    std::cout << "[Zero Elite] Shutting down..." << std::endl;
-
     // Cleanup
+    std::cout << std::endl << "[INFO] Shutting down..." << std::endl;
+    
     ShutdownZeroDMA();
     ShutdownZeroUI();
-
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
-
     CleanupDeviceD3D();
     DestroyWindow(g_hWnd);
-    UnregisterClassW(WINDOW_CLASS_NAME, g_wc.hInstance);
-
-    std::cout << "[Zero Elite] Shutdown complete. Goodbye!" << std::endl;
-
+    UnregisterClassW(WINDOW_CLASS_NAME, hInstance);
+    
+    std::cout << "[INFO] Goodbye!" << std::endl;
     FreeConsole();
-
+    
     return 0;
 }
 
-// Console subsystem entry point (for debugging)
-int main(int argc, char* argv[])
-{
-    UNREFERENCED_PARAMETER(argc);
-    UNREFERENCED_PARAMETER(argv);
-    
-    return wWinMain(GetModuleHandle(nullptr), nullptr, GetCommandLineW(), SW_SHOWDEFAULT);
-}
+// Console entry point
+int main() { return wWinMain(GetModuleHandle(nullptr), nullptr, nullptr, SW_SHOWDEFAULT); }

@@ -1,86 +1,115 @@
-# PROJECT ZERO | BO6 DMA Radar
+# PROJECT ZERO | BO6 DMA
 
-Professional DMA Overlay for Black Ops 6 with Radar, ESP, and Aimbot features.
+Professional DMA Overlay for Black Ops 6 with Radar, ESP, and Aimbot.
+
+## Screenshots
+
+The application displays:
+- **Menu** (Left side) - Dark/Red themed with tabs: AIMBOT, VISUALS, RADAR, MISC
+- **Radar** (Top right corner) - Standalone window showing player positions
+- **ESP** - Boxes, health bars, names on players
+- **Status Indicator** - Shows ONLINE (green) when DMA is connected
 
 ## Features
 
-### Core Features
-- **Transparent Overlay** - Renders on top of game without interfering with input
-- **Mouse-Controlled Menu** - Full mouse support with toggles, sliders, and combo boxes
-- **Non-Blocking Input** - INSERT key handled in separate thread (no freezing!)
-- **V-Sync OFF** - Minimal input lag for radar updates
-- **DMA Scatter Reads** - Batch multiple memory reads for smooth performance
-- **Pattern Scanner** - Auto-update offsets when game patches (stub implementation)
+### Auto-Launch
+- Menu appears **immediately** when you start the program
+- No need to press INSERT to show menu initially
+- INSERT key toggles menu on/off after startup
 
-### Radar
-- Real-time 2D radar with enemy/team positions
-- Configurable size and zoom
-- Player direction indicators
-- Color-coded dots (Red = Enemy, Blue = Team, Green = You)
+### DMA Engine
+- **DMA_ENABLED = 1** by default (ready for FPGA hardware)
+- **Scatter Reads** - Batches all memory reads for maximum performance
+- **Pattern Scanner (AOB Scan)** - Automatically finds game offsets
+- Falls back to simulation mode if FPGA not connected
 
-### Aimbot (UI Only)
-- FOV slider
-- Smoothness control
-- Target bone selection
-- Visibility check option
-- Configurable aim key
+### Pattern Scanner
+Automatically scans for game addresses using these patterns:
+- `PlayerBase`: `48 8B 05 ? ? ? ? 48 8B 88 ? ? ? ? 48 8B 01`
+- `ClientInfo`: `48 8B 1D ? ? ? ? 48 85 DB 74 ? 48 8B 03`
+- `EntityList`: `48 8D 0D ? ? ? ? E8 ? ? ? ? 48 85 C0 74`
+- `ViewMatrix`: `48 8B 15 ? ? ? ? 48 8D 4C 24 ? E8`
 
-### ESP (UI Only)
-- Box ESP (2D and Corner)
+### Aimbot Tab
+- Enable/Disable toggle
+- FOV slider (10-300)
+- Smoothness control (1-20)
+- Max Distance (10-500m)
+- Target Bone selection (Head/Neck/Chest)
+- Visibility Check option
+- Show FOV Circle toggle
+
+### Visuals Tab (ESP)
+- Box ESP (2D or Corner style)
 - Skeleton ESP
-- Health bars
-- Name tags
+- Health Bars (color changes based on HP)
+- Name Tags
 - Distance display
-- Snaplines
+- Snaplines (from Top/Center/Bottom)
+- Show Teammates option
 
-### Misc
-- No Flash
-- No Smoke
-- Bhop
-- Radar Hack (UAV)
-- Magic Bullet
+### Radar Tab
+- 2D Radar with player dots
+- Size adjustment (150-350px)
+- Zoom control (0.5x-4x)
+- Show/Hide Enemies
+- Show/Hide Teammates
+- Player count display
+
+### Misc Tab
+- No Recoil (placeholder)
+- Rapid Fire (placeholder)
+- Crosshair overlay (Cross/Dot/Circle styles)
+- Crosshair size adjustment
+- Stream Proof mode (placeholder)
 
 ## Controls
 
 | Key | Action |
 |-----|--------|
-| INSERT | Toggle Menu (Show/Hide) |
-| END | Exit Program |
-| Mouse | Interact with Menu |
+| **INSERT** | Toggle Menu Visibility |
+| **END** | Exit Program |
+| **Mouse** | Click & Drag controls |
+
+## Status Indicator
+
+The status shows DMA connection state:
+- **ONLINE** (Green) - FPGA connected and cod.exe found
+- **SIMULATION** (Yellow) - Running in demo mode
+- **FPGA ERROR** (Red) - Hardware not detected
+- **PROCESS NOT FOUND** (Red) - cod.exe not running
 
 ## Building
 
 ### Requirements
 - Visual Studio 2022
-- Windows 10 SDK
+- Windows 10/11 SDK
 - DirectX 11 (included with Windows)
 
-### Steps
-1. Open `ZeroElite.sln` in Visual Studio
-2. Select **Release | x64** configuration
-3. Build solution (Ctrl+Shift+B)
-4. Run `bin/Release/ZeroElite.exe`
+### For DMA Hardware
+1. Ensure `vmmdll.lib` is in `libs/` folder
+2. Place `vmmdll.dll`, `leechcore.dll`, `FTD3XX.dll` next to exe
+3. `DMA_ENABLED` is already set to `1`
+4. Build in **Release | x64**
 
-### For Real DMA Support
-1. Place `vmmdll.lib` in the `libs/` folder
-2. Place `vmmdll.dll` and related DLLs next to the .exe
-3. In `src/DMA_Engine.hpp`, change `#define DMA_ENABLED 0` to `#define DMA_ENABLED 1`
-4. Rebuild the project
+### Without DMA Hardware
+The program will run in **Simulation Mode** with animated test players.
+This is useful for testing UI and features.
 
 ## Project Structure
 
 ```
 ZeroElite/
 ├── src/
-│   ├── ZeroMain.cpp       # Main application, window, rendering
-│   ├── ZeroUI.cpp         # UI stubs (rendering in ZeroMain)
-│   ├── ZeroUI.hpp         # UI declarations
-│   ├── DMA_Engine.cpp     # DMA implementation & player management
-│   └── DMA_Engine.hpp     # DMA structures & declarations
+│   ├── ZeroMain.cpp      # Main app, window, rendering, UI
+│   ├── ZeroUI.cpp        # UI stubs (for compatibility)
+│   ├── ZeroUI.hpp        # UI declarations
+│   ├── DMA_Engine.cpp    # DMA, Scatter, Pattern Scanner
+│   └── DMA_Engine.hpp    # DMA structures
 ├── include/
-│   └── vmmdll.h           # VMMDLL header (for real DMA)
+│   └── vmmdll.h          # VMMDLL header
 ├── libs/
-│   └── vmmdll.lib         # VMMDLL library (optional)
+│   └── vmmdll.lib        # VMMDLL library
 ├── ZeroElite.sln
 ├── ZeroElite.vcxproj
 └── README.md
@@ -88,46 +117,49 @@ ZeroElite/
 
 ## Technical Details
 
-### Rendering Pipeline
-- **D3D11** - Hardware-accelerated graphics
-- **D2D1** - 2D drawing (shapes, text)
-- **DWrite** - Text rendering with custom fonts
+### Performance Optimizations
+- **V-Sync OFF** - Minimal input lag
+- **Scatter Reads** - Single DMA request for all players
+- **120Hz Update Thread** - Smooth radar updates
+- **Direct2D Rendering** - Hardware accelerated 2D
 
-### Overlay Window
-- `WS_EX_TOPMOST` - Always on top
-- `WS_EX_LAYERED` - Transparency support
-- `WS_EX_TRANSPARENT` - Click-through when menu hidden
-- `DwmExtendFrameIntoClientArea` - Glass effect for true transparency
+### Overlay Technology
+- Transparent window with `WS_EX_LAYERED`
+- Click-through when menu hidden (`WS_EX_TRANSPARENT`)
+- Always-on-top (`WS_EX_TOPMOST`)
+- DWM glass effect for true transparency
 
-### Threading
-- **Main Thread** - Window message pump, rendering
-- **Input Thread** - Keyboard monitoring (GetAsyncKeyState)
-- **Update Thread** - Player data simulation/reading
+### Threading Model
+- **Main Thread** - Window messages + Rendering
+- **Input Thread** - Keyboard monitoring (non-blocking)
+- **Update Thread** - Player data reading/simulation
 
-### DMA Features
-- **Scatter Reads** - Batch multiple memory reads for efficiency
-- **Pattern Scanning** - Automatic offset updates (stub)
-- **Simulation Mode** - Works without FPGA for testing
+## Adding New Patterns
 
-## Troubleshooting
+To add a new pattern for auto-offset:
 
-### Menu Not Showing
-- Press INSERT to toggle menu visibility
-- Make sure the program is running (check taskbar)
+```cpp
+// In DMA_Engine.hpp - Add to Patterns namespace
+constexpr const char* NewPattern = "\x48\x89\x5C\x24\x00\x57";
+constexpr const char* NewPatternMask = "xxxx?x";
 
-### Can't Click Menu
-- When menu is visible, overlay captures mouse input
-- Press INSERT to hide menu and return to game
+// In DMA_Engine.cpp - UpdateAllOffsets()
+addr = FindPattern(baseAddr, moduleSize, Patterns::NewPattern, Patterns::NewPatternMask);
+if (addr) {
+    g_Offsets.NewOffset = ResolveRelative(addr, 3, 7);
+    if (g_Offsets.NewOffset) s_FoundCount++;
+}
+```
 
-### Radar Not Moving
-- In simulation mode, players animate automatically
-- For real gameplay, ensure DMA_ENABLED = 1 and FPGA connected
+## Process Name
 
-## Disclaimer
-
-This software is provided for educational purposes only. Use at your own risk.
-The developer is not responsible for any bans or damages resulting from use of this software.
+Target: `cod.exe` (Call of Duty unified engine)
 
 ## Version
 
-**PROJECT ZERO v2.0** - Professional DMA Radar for BO6
+**PROJECT ZERO v2.1** - Professional DMA Radar
+
+## Disclaimer
+
+This software is for educational purposes only.
+Use at your own risk. Developer is not responsible for any consequences.

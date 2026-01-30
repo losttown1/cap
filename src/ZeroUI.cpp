@@ -1,31 +1,8 @@
-// ZeroUI.cpp - UI Implementation (Stubs - Main rendering is in ZeroMain.cpp)
+// ZeroUI.cpp - UI Stubs
+// Note: All UI rendering is done directly in ZeroMain.cpp using Direct2D
+// This file is kept for project compatibility
+
 #include "ZeroUI.hpp"
 
-// The UI is implemented directly in ZeroMain.cpp using Direct2D
-// These are stub functions for compatibility
-
-void InitializeZeroUI()
-{
-    // Initialization done in ZeroMain.cpp
-}
-
-void RenderZeroMenu()
-{
-    // Rendering done in ZeroMain.cpp
-}
-
-void ToggleZeroMenu()
-{
-    // Handled by input thread in ZeroMain.cpp
-}
-
-bool IsZeroMenuVisible()
-{
-    return true;  // Controlled by ZeroMain.cpp
-}
-
-void SetZeroMenuVisible(bool visible)
-{
-    (void)visible;
-    // Controlled by ZeroMain.cpp
-}
+// UI state is managed in ZeroMain.cpp
+// These stubs exist only for linking compatibility

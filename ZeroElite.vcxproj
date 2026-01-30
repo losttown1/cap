@@ -57,6 +57,7 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>d3d11.lib;d2d1.lib;dwrite.lib;dwmapi.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)libs;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <EntryPointSymbol>wWinMainCRTStartup</EntryPointSymbol>
     </Link>
   </ItemDefinitionGroup>
@@ -81,6 +82,7 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>d3d11.lib;d2d1.lib;dwrite.lib;dwmapi.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)libs;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <EntryPointSymbol>wWinMainCRTStartup</EntryPointSymbol>
     </Link>
   </ItemDefinitionGroup>
@@ -94,6 +96,7 @@
   <ItemGroup>
     <ClInclude Include="src\ZeroUI.hpp" />
     <ClInclude Include="src\DMA_Engine.hpp" />
+    <ClInclude Include="include\vmmdll.h" />
   </ItemGroup>
   
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

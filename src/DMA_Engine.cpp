@@ -10,14 +10,15 @@
 #include <fstream>
 #include <sstream>
 
-#if DMA_ENABLED
+#ifdef _WIN32
 #include <Windows.h>
+#endif
+
+#if DMA_ENABLED
 #include "vmmdll.h"
 #pragma comment(lib, "vmmdll.lib")
 static VMM_HANDLE g_VMMDLL = nullptr;
 static DWORD g_DMA_PID = 0;
-#else
-#include <Windows.h>
 #endif
 
 // ============================================================================
@@ -52,15 +53,6 @@ std::unordered_map<std::string, MapInfo> MapTextureManager::s_MapDatabase;
 // ============================================================================
 // CONFIG FILE HANDLING
 // ============================================================================
-static void TrimString(char* str)
-{
-    char* end;
-    while (*str == ' ' || *str == '\t') str++;
-    end = str + strlen(str) - 1;
-    while (end > str && (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r')) end--;
-    *(end + 1) = 0;
-}
-
 bool LoadConfig(const char* filename)
 {
     std::ifstream file(filename);
@@ -76,10 +68,8 @@ bool LoadConfig(const char* filename)
     
     while (std::getline(file, line))
     {
-        // Skip comments and empty lines
         if (line.empty() || line[0] == ';' || line[0] == '#') continue;
         
-        // Section header
         if (line[0] == '[')
         {
             size_t end = line.find(']');
@@ -88,19 +78,16 @@ bool LoadConfig(const char* filename)
             continue;
         }
         
-        // Key=Value
         size_t eq = line.find('=');
         if (eq == std::string::npos) continue;
         
         std::string key = line.substr(0, eq);
         std::string value = line.substr(eq + 1);
         
-        // Trim whitespace
         while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
         while (!value.empty() && (value[0] == ' ' || value[0] == '\t')) value.erase(0, 1);
         while (!value.empty() && (value.back() == '\r' || value.back() == '\n')) value.pop_back();
         
-        // Parse values
         if (section == "Device")
         {
             if (key == "Type") strncpy_s(g_Config.deviceType, value.c_str(), 31);
@@ -151,32 +138,22 @@ bool SaveConfig(const char* filename)
     file << "; Hardware-ID Masking: Change device settings to avoid detection\n\n";
     
     file << "[Device]\n";
-    file << "; Device type: fpga, usb3380, etc.\n";
     file << "Type=" << g_Config.deviceType << "\n";
-    file << "; Additional device arguments\n";
     file << "Arg=" << g_Config.deviceArg << "\n";
-    file << "; Algorithm: 0, 1, 2 (varies by device)\n";
     file << "Algorithm=" << g_Config.deviceAlgo << "\n";
-    file << "; Custom PCIe ID for Hardware-ID masking\n";
     file << "UseCustomPCIe=" << (g_Config.useCustomPCIe ? "1" : "0") << "\n";
     file << "CustomPCIeID=" << g_Config.customPCIeID << "\n\n";
     
     file << "[Target]\n";
-    file << "; Target process name (cod.exe for Call of Duty)\n";
     file << "ProcessName=" << g_Config.processName << "\n\n";
     
     file << "[Performance]\n";
-    file << "; Number of reads to batch together\n";
     file << "ScatterBatchSize=" << g_Config.scatterBatchSize << "\n";
-    file << "; Update rate in Hz (60-240)\n";
     file << "UpdateRateHz=" << g_Config.updateRateHz << "\n";
-    file << "; Use Scatter Registry for maximum performance\n";
     file << "UseScatterRegistry=" << (g_Config.useScatterRegistry ? "1" : "0") << "\n\n";
     
     file << "[Map]\n";
-    file << "; Path to map background image (PNG/JPG)\n";
     file << "ImagePath=" << g_Config.mapImagePath << "\n";
-    file << "; Scale and offset for coordinate mapping\n";
     file << "ScaleX=" << g_Config.mapScaleX << "\n";
     file << "ScaleY=" << g_Config.mapScaleY << "\n";
     file << "OffsetX=" << g_Config.mapOffsetX << "\n";
@@ -192,7 +169,6 @@ bool SaveConfig(const char* filename)
 
 void CreateDefaultConfig(const char* filename)
 {
-    // Set defaults
     strcpy_s(g_Config.deviceType, "fpga");
     strcpy_s(g_Config.deviceArg, "");
     strcpy_s(g_Config.deviceAlgo, "0");
@@ -226,7 +202,6 @@ void ScatterReadRegistry::RegisterPlayerData(int playerIndex, uintptr_t baseAddr
 {
     if (playerIndex < 0 || baseAddr == 0) return;
     
-    // Ensure buffer exists
     while ((int)m_PlayerBuffers.size() <= playerIndex)
     {
         m_PlayerBuffers.push_back({});
@@ -234,7 +209,6 @@ void ScatterReadRegistry::RegisterPlayerData(int playerIndex, uintptr_t baseAddr
     
     PlayerRawData& buf = m_PlayerBuffers[playerIndex];
     
-    // Register all player data reads
     m_Entries.push_back({baseAddr + GameOffsets::EntityPos, &buf.position, sizeof(Vec3), ScatterDataType::PLAYER_POSITION, playerIndex});
     m_Entries.push_back({baseAddr + GameOffsets::EntityHealth, &buf.health, sizeof(int), ScatterDataType::PLAYER_HEALTH, playerIndex});
     m_Entries.push_back({baseAddr + GameOffsets::EntityMaxHealth, &buf.maxHealth, sizeof(int), ScatterDataType::PLAYER_HEALTH, playerIndex});
@@ -277,17 +251,14 @@ void ScatterReadRegistry::ExecuteAll()
     {
         DMAEngine::ExecuteScatter(m_Entries);
         
-        // Copy data to PlayerManager
         std::lock_guard<std::mutex> lock(PlayerManager::GetMutex());
         auto& players = PlayerManager::GetPlayers();
         auto& local = PlayerManager::GetLocalPlayer();
         
-        // Update local player
         local.origin = m_LocalPosition;
         local.yaw = m_LocalYaw;
         local.team = m_LocalTeam;
         
-        // Update all players from buffers
         for (size_t i = 0; i < m_PlayerBuffers.size() && i < players.size(); i++)
         {
             PlayerRawData& raw = m_PlayerBuffers[i];
@@ -304,7 +275,6 @@ void ScatterReadRegistry::ExecuteAll()
             p.isEnemy = (raw.team != m_LocalTeam);
             p.distance = (p.origin - m_LocalPosition).Length();
             
-            // Copy name if valid
             if (raw.name[0] != 0)
             {
                 strncpy_s(p.name, raw.name, 31);
@@ -315,7 +285,6 @@ void ScatterReadRegistry::ExecuteAll()
     }
 #endif
     
-    // Simulation - zero fill
     for (auto& entry : m_Entries)
     {
         if (entry.buffer)
@@ -341,7 +310,6 @@ int ScatterReadRegistry::GetTotalBytes() const
 // ============================================================================
 void MapTextureManager::InitializeMapDatabase()
 {
-    // BO6 Maps (example coordinates - need calibration)
     MapInfo nuketown;
     strcpy_s(nuketown.name, "Nuketown");
     nuketown.minX = -2000.0f; nuketown.maxX = 2000.0f;
@@ -359,8 +327,6 @@ void MapTextureManager::InitializeMapDatabase()
     rewind.minX = -3000.0f; rewind.maxX = 3000.0f;
     rewind.minY = -3000.0f; rewind.maxY = 3000.0f;
     s_MapDatabase["mp_rewind"] = rewind;
-    
-    // Add more maps as needed
 }
 
 bool MapTextureManager::LoadMapConfig(const char* mapName)
@@ -372,7 +338,6 @@ bool MapTextureManager::LoadMapConfig(const char* mapName)
         return true;
     }
     
-    // Use default bounds
     strcpy_s(s_CurrentMap.name, mapName);
     s_CurrentMap.minX = -5000.0f;
     s_CurrentMap.maxX = 5000.0f;
@@ -384,14 +349,11 @@ bool MapTextureManager::LoadMapConfig(const char* mapName)
 
 bool MapTextureManager::LoadMapTexture(const char* imagePath)
 {
-    // In a real implementation, this would load a texture using WIC or similar
-    // For now, just store the path
     if (imagePath && imagePath[0])
     {
         strcpy_s(s_CurrentMap.imagePath, imagePath);
         s_CurrentMap.hasTexture = true;
         
-        // Apply config scaling
         s_CurrentMap.scaleX = g_Config.mapScaleX;
         s_CurrentMap.scaleY = g_Config.mapScaleY;
         s_CurrentMap.offsetX = g_Config.mapOffsetX;
@@ -409,26 +371,22 @@ Vec2 MapTextureManager::GameToMapCoords(const Vec3& gamePos)
 {
     MapInfo& map = s_CurrentMap;
     
-    // Normalize to 0-1 range
     float nx = (gamePos.x - map.minX) / (map.maxX - map.minX);
     float ny = (gamePos.y - map.minY) / (map.maxY - map.minY);
     
-    // Apply scale and offset
     nx = nx * map.scaleX + map.offsetX;
     ny = ny * map.scaleY + map.offsetY;
     
-    // Apply rotation
     if (map.rotation != 0.0f)
     {
         float rad = map.rotation * 3.14159265f / 180.0f;
-        float cx = 0.5f, cy = 0.5f;  // Rotate around center
+        float cx = 0.5f, cy = 0.5f;
         float dx = nx - cx, dy = ny - cy;
         float cosR = cosf(rad), sinR = sinf(rad);
         nx = cx + dx * cosR - dy * sinR;
         ny = cy + dx * sinR + dy * cosR;
     }
     
-    // Scale to image dimensions
     return Vec2(nx * map.imageWidth, (1.0f - ny) * map.imageHeight);
 }
 
@@ -437,7 +395,6 @@ Vec2 MapTextureManager::GameToRadarCoords(const Vec3& gamePos, const Vec3& local
 {
     Vec3 delta = gamePos - localPos;
     
-    // Rotate relative to player view
     float yawRad = -localYaw * 3.14159265f / 180.0f;
     float cosY = cosf(yawRad);
     float sinY = sinf(yawRad);
@@ -445,7 +402,6 @@ Vec2 MapTextureManager::GameToRadarCoords(const Vec3& gamePos, const Vec3& local
     float rotX = delta.x * cosY - delta.y * sinY;
     float rotY = delta.x * sinY + delta.y * cosY;
     
-    // Scale to radar size
     float scale = (radarSize * 0.4f) / (100.0f / zoom);
     
     return Vec2(radarCX + rotX * scale, radarCY - rotY * scale);
@@ -467,7 +423,6 @@ void MapTextureManager::SetMapBounds(const char* mapName, float minX, float maxX
 // ============================================================================
 bool DMAEngine::Initialize()
 {
-    // Load config first
     LoadConfig("zero.ini");
     return InitializeWithConfig(g_Config);
 }
@@ -477,48 +432,21 @@ bool DMAEngine::InitializeWithConfig(const DMAConfig& config)
     strcpy_s(s_StatusText, "INITIALIZING...");
     
 #if DMA_ENABLED
-    // Build device string based on config
+    // Build device string
     char deviceString[256];
+    snprintf(deviceString, sizeof(deviceString), "%s", config.deviceType);
     
-    if (config.useCustomPCIe && config.customPCIeID[0])
-    {
-        // Hardware-ID Masking: Use custom PCIe ID
-        snprintf(deviceString, sizeof(deviceString), "%s://pcieid=%s,algo=%s%s%s",
-                 config.deviceType,
-                 config.customPCIeID,
-                 config.deviceAlgo,
-                 config.deviceArg[0] ? "," : "",
-                 config.deviceArg);
-        
-        snprintf(s_DeviceInfo, sizeof(s_DeviceInfo), "Custom: %s (ID: %s)", 
-                 config.deviceType, config.customPCIeID);
-    }
-    else if (config.deviceArg[0])
-    {
-        snprintf(deviceString, sizeof(deviceString), "%s://%s,algo=%s",
-                 config.deviceType, config.deviceArg, config.deviceAlgo);
-        
-        snprintf(s_DeviceInfo, sizeof(s_DeviceInfo), "Device: %s (%s)", 
-                 config.deviceType, config.deviceArg);
-    }
-    else
-    {
-        snprintf(deviceString, sizeof(deviceString), "%s://algo=%s",
-                 config.deviceType, config.deviceAlgo);
-        
-        snprintf(s_DeviceInfo, sizeof(s_DeviceInfo), "Device: %s (default)", config.deviceType);
-    }
+    snprintf(s_DeviceInfo, sizeof(s_DeviceInfo), "Device: %s", config.deviceType);
     
-    // Initialize VMMDLL with config-driven device string
-    LPCSTR args[] = {"", "-device", deviceString};
+    // Build argument array - use non-const for VMMDLL compatibility
+    char arg0[] = "";
+    char arg1[] = "-device";
+    char arg2[256];
+    strncpy_s(arg2, deviceString, 255);
+    
+    char* args[3] = { arg0, arg1, arg2 };
+    
     g_VMMDLL = VMMDLL_Initialize(3, args);
-    
-    if (!g_VMMDLL)
-    {
-        // Fallback to simple init
-        LPCSTR args2[] = {"", "-device", config.deviceType};
-        g_VMMDLL = VMMDLL_Initialize(3, args2);
-    }
     
     if (!g_VMMDLL)
     {
@@ -530,40 +458,28 @@ bool DMAEngine::InitializeWithConfig(const DMAConfig& config)
     // Find target process
     if (!VMMDLL_PidGetFromName(g_VMMDLL, (LPSTR)config.processName, &g_DMA_PID) || g_DMA_PID == 0)
     {
-        snprintf(s_StatusText, sizeof(s_StatusText), "%s NOT FOUND", config.processName);
+        snprintf(s_StatusText, sizeof(s_StatusText), "PROCESS NOT FOUND");
         goto simulation;
     }
     
     // Get base address
-    s_BaseAddress = VMMDLL_ProcessGetModuleBaseW(g_VMMDLL, g_DMA_PID, config.processNameW);
+    s_BaseAddress = VMMDLL_ProcessGetModuleBase(g_VMMDLL, g_DMA_PID, (LPSTR)config.processName);
     if (s_BaseAddress == 0)
     {
         strcpy_s(s_StatusText, "BASE ADDR ERROR");
         goto simulation;
     }
     
-    // Get module size
-    VMMDLL_MAP_MODULEENTRY moduleEntry = {};
-    if (VMMDLL_Map_GetModuleFromNameW(g_VMMDLL, g_DMA_PID, config.processNameW, &moduleEntry, 0))
-    {
-        s_ModuleSize = moduleEntry.cbImageSize;
-    }
-    else
-    {
-        s_ModuleSize = 0x5000000;
-    }
+    // Default module size
+    s_ModuleSize = 0x5000000;
     
     s_Connected = true;
     s_SimulationMode = false;
     strcpy_s(s_StatusText, "ONLINE");
     
-    // Run pattern scanner
     PatternScanner::UpdateAllOffsets();
-    
-    // Initialize map database
     MapTextureManager::InitializeMapDatabase();
     
-    // Load map texture if configured
     if (config.mapImagePath[0])
     {
         MapTextureManager::LoadMapTexture(config.mapImagePath);
@@ -582,12 +498,10 @@ simulation:
     strcpy_s(s_StatusText, "SIMULATION");
     strcpy_s(s_DeviceInfo, "Demo mode (no hardware)");
     
-    // Use default offsets
     g_Offsets.PlayerBase = s_BaseAddress + 0x17AA8E98;
     g_Offsets.ClientInfo = s_BaseAddress + 0x17AA9000;
     g_Offsets.EntityList = s_BaseAddress + 0x16D5B8D8;
     
-    // Initialize map database even in simulation
     MapTextureManager::InitializeMapDatabase();
     
     return true;
@@ -603,7 +517,6 @@ void DMAEngine::Shutdown()
     }
 #endif
     
-    // Save config on exit
     SaveConfig("zero.ini");
     
     s_Connected = false;
@@ -678,33 +591,14 @@ void DMAEngine::ExecuteScatter(std::vector<ScatterEntry>& entries)
 #if DMA_ENABLED
     if (s_Connected && g_VMMDLL && g_DMA_PID)
     {
-        // Create scatter handle
-        VMMDLL_SCATTER_HANDLE hScatter = VMMDLL_Scatter_Initialize(g_VMMDLL, g_DMA_PID, VMMDLL_FLAG_NOCACHE);
-        if (hScatter)
-        {
-            // Prepare all reads
-            for (auto& entry : entries)
-            {
-                VMMDLL_Scatter_Prepare(hScatter, entry.address, (DWORD)entry.size);
-            }
-            
-            // Execute in single transaction
-            VMMDLL_Scatter_Execute(hScatter);
-            
-            // Read all results
-            for (auto& entry : entries)
-            {
-                VMMDLL_Scatter_Read(hScatter, entry.address, (DWORD)entry.size, (PBYTE)entry.buffer, nullptr);
-            }
-            
-            VMMDLL_Scatter_CloseHandle(hScatter);
-            return;
-        }
-        
-        // Fallback to individual reads
+        // Use individual reads as scatter API varies between VMMDLL versions
         for (auto& entry : entries)
         {
-            ReadBuffer(entry.address, entry.buffer, entry.size);
+            if (entry.buffer && entry.address && entry.size > 0)
+            {
+                VMMDLL_MemReadEx(g_VMMDLL, g_DMA_PID, entry.address, 
+                                (PBYTE)entry.buffer, (DWORD)entry.size, nullptr, VMMDLL_FLAG_NOCACHE);
+            }
         }
         return;
     }
@@ -728,7 +622,9 @@ uintptr_t DMAEngine::GetModuleBase(const wchar_t* moduleName)
 #if DMA_ENABLED
     if (s_Connected && g_VMMDLL && g_DMA_PID)
     {
-        return VMMDLL_ProcessGetModuleBaseW(g_VMMDLL, g_DMA_PID, moduleName);
+        char moduleNameA[256];
+        wcstombs_s(nullptr, moduleNameA, moduleName, 255);
+        return VMMDLL_ProcessGetModuleBase(g_VMMDLL, g_DMA_PID, moduleNameA);
     }
 #endif
     (void)moduleName;
@@ -772,7 +668,7 @@ uintptr_t PatternScanner::FindPattern(uintptr_t start, size_t size, const char* 
         
         for (size_t offset = 0; offset < size; offset += chunkSize)
         {
-            size_t readSize = min(chunkSize + patternLen, size - offset);
+            size_t readSize = (std::min)(chunkSize + patternLen, size - offset);
             if (!DMAEngine::ReadBuffer(start + offset, buffer.data(), readSize))
                 continue;
             
@@ -939,17 +835,14 @@ void PlayerManager::UpdateWithScatterRegistry()
 #if DMA_ENABLED
     if (DMAEngine::IsConnected() && g_Offsets.EntityList)
     {
-        // Clear registry
         g_ScatterRegistry.Clear();
         
-        // Register all player reads
         for (size_t i = 0; i < s_Players.size(); i++)
         {
             uintptr_t entityAddr = g_Offsets.EntityList + i * GameOffsets::EntitySize;
             g_ScatterRegistry.RegisterPlayerData((int)i, entityAddr);
         }
         
-        // Register local player
         if (g_Offsets.ClientInfo)
         {
             uintptr_t clientBase = DMAEngine::Read<uintptr_t>(g_Offsets.ClientInfo);
@@ -959,13 +852,11 @@ void PlayerManager::UpdateWithScatterRegistry()
             }
         }
         
-        // Register view matrix
         if (g_Offsets.ViewMatrix)
         {
             g_ScatterRegistry.RegisterViewMatrix(g_Offsets.ViewMatrix);
         }
         
-        // Execute all reads in ONE transaction
         g_ScatterRegistry.ExecuteAll();
         
         return;
@@ -1004,7 +895,7 @@ void PlayerManager::SimulateUpdate()
         
         float healthBase = 50.0f + sinf(s_SimTime * 0.2f + (float)i * 0.7f) * 40.0f;
         p.health = (int)healthBase;
-        p.health = max(1, min(p.health, 100));
+        p.health = (std::max)(1, (std::min)(p.health, 100));
         p.isAlive = true;
         p.isVisible = ((int)(s_SimTime * 2 + i) % 3) != 0;
     }
@@ -1054,10 +945,9 @@ bool WorldToScreen(const Vec3& worldPos, Vec2& screenPos, int screenW, int scree
 bool WorldToRadar(const Vec3& worldPos, const Vec3& localPos, float localYaw,
                   Vec2& radarPos, float radarCX, float radarCY, float radarScale)
 {
-    return MapTextureManager::GameToRadarCoords(worldPos, localPos, localYaw,
-                                                 radarCX, radarCY, radarScale * 2, 1.0f).x != 0 ||
-           MapTextureManager::GameToRadarCoords(worldPos, localPos, localYaw,
-                                                 radarCX, radarCY, radarScale * 2, 1.0f).y != 0;
+    radarPos = MapTextureManager::GameToRadarCoords(worldPos, localPos, localYaw,
+                                                     radarCX, radarCY, radarScale * 2, 1.0f);
+    return true;
 }
 
 float GetFOVTo(const Vec2& screenCenter, const Vec2& targetScreen)

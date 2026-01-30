@@ -1,5 +1,5 @@
 // DMA_Engine.cpp - Professional DMA Implementation
-// Features: Pre-Launch Diagnostics, Scatter Registry, Pattern Scanner
+// HIGH-PERFORMANCE: Uses VMMDLL_Scatter for batched reads
 
 #include "DMA_Engine.hpp"
 #include <cstring>
@@ -57,19 +57,143 @@ std::unordered_map<std::string, MapInfo> MapTextureManager::s_MapDatabase;
 // KNOWN GENERIC/LEAKED DEVICE IDS
 // ============================================================================
 static const char* GENERIC_DEVICE_IDS[] = {
-    "10EE:0007",  // Generic Xilinx
-    "10EE:7024",  // Generic Artix-7
-    "1234:5678",  // Placeholder
-    nullptr
+    "10EE:0007", "10EE:7024", "1234:5678", nullptr
 };
 
 static const char* LEAKED_DEVICE_IDS[] = {
-    "1172:E001",  // Known leaked config
-    "10EE:7011",  // Leaked from public source
-    "10EE:7021",  // Common leaked ID
-    "CAFE:BABE",  // Test/leaked ID
-    nullptr
+    "1172:E001", "10EE:7011", "10EE:7021", "CAFE:BABE", nullptr
 };
+
+// ============================================================================
+// VMMDLL SCATTER WRAPPER CLASS
+// ============================================================================
+#if DMA_ENABLED
+class VMDMAScatter {
+public:
+    VMDMAScatter() : m_hScatter(nullptr), m_Prepared(false) {}
+    
+    ~VMDMAScatter() {
+        Close();
+    }
+    
+    bool Initialize() {
+        if (!g_VMMDLL || !g_DMA_PID) return false;
+        
+        // Create scatter handle with NOCACHE flag for real-time data
+        m_hScatter = VMMDLL_Scatter_Initialize(g_VMMDLL, g_DMA_PID, VMMDLL_FLAG_NOCACHE);
+        m_Prepared = false;
+        return m_hScatter != nullptr;
+    }
+    
+    bool Prepare(ULONG64 address, DWORD size) {
+        if (!m_hScatter) return false;
+        m_Prepared = true;
+        return VMMDLL_Scatter_Prepare(m_hScatter, address, size);
+    }
+    
+    bool PrepareWrite(ULONG64 address, PBYTE data, DWORD size) {
+        if (!m_hScatter) return false;
+        m_Prepared = true;
+        return VMMDLL_Scatter_PrepareWrite(m_hScatter, address, data, size);
+    }
+    
+    bool Execute() {
+        if (!m_hScatter || !m_Prepared) return false;
+        return VMMDLL_Scatter_Execute(m_hScatter);
+    }
+    
+    bool Read(ULONG64 address, PBYTE buffer, DWORD size) {
+        if (!m_hScatter) return false;
+        return VMMDLL_Scatter_Read(m_hScatter, address, size, buffer, nullptr);
+    }
+    
+    bool Clear() {
+        if (!m_hScatter) return false;
+        m_Prepared = false;
+        return VMMDLL_Scatter_Clear(m_hScatter, g_DMA_PID, VMMDLL_FLAG_NOCACHE);
+    }
+    
+    void Close() {
+        if (m_hScatter) {
+            VMMDLL_Scatter_CloseHandle(m_hScatter);
+            m_hScatter = nullptr;
+        }
+        m_Prepared = false;
+    }
+    
+    bool IsValid() const { return m_hScatter != nullptr; }
+    
+private:
+    VMMDLL_SCATTER_HANDLE m_hScatter;
+    bool m_Prepared;
+};
+
+// Global scatter instance for reuse
+static VMDMAScatter g_Scatter;
+#endif
+
+// ============================================================================
+// HIGH-PERFORMANCE SCATTER READ FUNCTION
+// ============================================================================
+void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
+{
+    if (entries.empty()) return;
+    
+#if DMA_ENABLED
+    if (!DMAEngine::IsConnected() || !g_VMMDLL || !g_DMA_PID)
+    {
+        // Simulation mode - zero fill
+        for (auto& entry : entries)
+            if (entry.buffer) memset(entry.buffer, 0, entry.size);
+        return;
+    }
+    
+    // Initialize scatter handle
+    VMMDLL_SCATTER_HANDLE hScatter = VMMDLL_Scatter_Initialize(g_VMMDLL, g_DMA_PID, VMMDLL_FLAG_NOCACHE);
+    if (!hScatter)
+    {
+        // Fallback to individual reads
+        for (auto& entry : entries)
+        {
+            if (entry.buffer && entry.address && entry.size > 0)
+            {
+                VMMDLL_MemReadEx(g_VMMDLL, g_DMA_PID, entry.address, 
+                                (PBYTE)entry.buffer, (DWORD)entry.size, nullptr, VMMDLL_FLAG_NOCACHE);
+            }
+        }
+        return;
+    }
+    
+    // STEP 1: Prepare all reads (queue them)
+    for (auto& entry : entries)
+    {
+        if (entry.address && entry.size > 0)
+        {
+            VMMDLL_Scatter_Prepare(hScatter, entry.address, (DWORD)entry.size);
+        }
+    }
+    
+    // STEP 2: Execute all reads in ONE DMA transaction
+    VMMDLL_Scatter_Execute(hScatter);
+    
+    // STEP 3: Read results from scatter buffer
+    for (auto& entry : entries)
+    {
+        if (entry.buffer && entry.address && entry.size > 0)
+        {
+            VMMDLL_Scatter_Read(hScatter, entry.address, (DWORD)entry.size, (PBYTE)entry.buffer, nullptr);
+        }
+    }
+    
+    // STEP 4: Clean up
+    VMMDLL_Scatter_CloseHandle(hScatter);
+    
+#else
+    // Simulation mode
+    for (auto& entry : entries)
+        if (entry.buffer) memset(entry.buffer, 0, entry.size);
+#endif
+}
 
 // ============================================================================
 // DIAGNOSTIC SYSTEM IMPLEMENTATION
@@ -95,24 +219,16 @@ const char* DiagnosticSystem::GetErrorString(DiagnosticResult result)
 bool DiagnosticSystem::IsGenericDeviceID(const char* deviceID)
 {
     if (!deviceID || !deviceID[0]) return false;
-    
     for (int i = 0; GENERIC_DEVICE_IDS[i] != nullptr; i++)
-    {
-        if (strstr(deviceID, GENERIC_DEVICE_IDS[i]) != nullptr)
-            return true;
-    }
+        if (strstr(deviceID, GENERIC_DEVICE_IDS[i]) != nullptr) return true;
     return false;
 }
 
 bool DiagnosticSystem::IsLeakedDeviceID(const char* deviceID)
 {
     if (!deviceID || !deviceID[0]) return false;
-    
     for (int i = 0; LEAKED_DEVICE_IDS[i] != nullptr; i++)
-    {
-        if (strstr(deviceID, LEAKED_DEVICE_IDS[i]) != nullptr)
-            return true;
-    }
+        if (strstr(deviceID, LEAKED_DEVICE_IDS[i]) != nullptr) return true;
     return false;
 }
 
@@ -129,28 +245,20 @@ void DiagnosticSystem::ShowErrorPopup(const char* title, const char* message)
 
 void DiagnosticSystem::SelfDestruct(const char* reason)
 {
-    // Log the reason
     FILE* logFile = nullptr;
     fopen_s(&logFile, "zero_error.log", "w");
     if (logFile)
     {
-        fprintf(logFile, "PROJECT ZERO - Self-Destruct Triggered\n");
-        fprintf(logFile, "Reason: %s\n", reason);
-        fprintf(logFile, "Time: %lld\n", (long long)time(nullptr));
+        fprintf(logFile, "PROJECT ZERO - Self-Destruct\nReason: %s\nTime: %lld\n", reason, (long long)time(nullptr));
         fclose(logFile);
     }
     
-    // Show error popup
     char message[512];
-    snprintf(message, sizeof(message), 
-             "Security check failed.\n\nReason: %s\n\nThe program will now close for safety.", 
-             reason);
+    snprintf(message, sizeof(message), "Security check failed.\n\nReason: %s\n\nProgram will close.", reason);
     ShowErrorPopup("PROJECT ZERO - Security Alert", message);
     
-    // Clean up DMA
     DMAEngine::Shutdown();
     
-    // Terminate
 #ifdef _WIN32
     ExitProcess(1);
 #else
@@ -164,33 +272,25 @@ DiagnosticResult DiagnosticSystem::CheckDeviceHandshake()
     strcpy_s(g_DiagStatus.deviceName, "Unknown");
     
 #if DMA_ENABLED
-    // Try to initialize VMMDLL
     char arg0[] = "";
     char arg1[] = "-device";
     char arg2[64];
     strncpy_s(arg2, g_Config.deviceType, 63);
-    
     char* args[3] = { arg0, arg1, arg2 };
     
     VMM_HANDLE testHandle = VMMDLL_Initialize(3, args);
-    
     if (!testHandle)
     {
         g_DiagStatus.lastError = DiagnosticResult::DEVICE_NOT_FOUND;
-        strcpy_s(g_DiagStatus.errorMessage, "VMMDLL_Initialize failed - No DMA device detected");
+        strcpy_s(g_DiagStatus.errorMessage, "VMMDLL_Initialize failed");
         return DiagnosticResult::DEVICE_NOT_FOUND;
     }
     
-    // Store the handle for later use
     g_VMMDLL = testHandle;
-    
-    // Get device info
     strcpy_s(g_DiagStatus.deviceName, g_Config.deviceType);
     g_DiagStatus.deviceHandshake = true;
-    
     return DiagnosticResult::SUCCESS;
 #else
-    // Simulation mode always passes
     strcpy_s(g_DiagStatus.deviceName, "Simulation");
     g_DiagStatus.deviceHandshake = true;
     return DiagnosticResult::SUCCESS;
@@ -202,8 +302,6 @@ DiagnosticResult DiagnosticSystem::CheckFirmwareIntegrity()
     g_DiagStatus.firmwareCheck = false;
     strcpy_s(g_DiagStatus.firmwareVersion, "Unknown");
     strcpy_s(g_DiagStatus.deviceID, "Unknown");
-    g_DiagStatus.isGenericID = false;
-    g_DiagStatus.isLeakedID = false;
     
 #if DMA_ENABLED
     if (!g_VMMDLL)
@@ -212,50 +310,37 @@ DiagnosticResult DiagnosticSystem::CheckFirmwareIntegrity()
         return DiagnosticResult::DEVICE_NOT_FOUND;
     }
     
-    // Get FPGA device ID (simulated - real implementation would read PCIe config space)
-    // In a real implementation, you would use VMMDLL_ConfigGet or direct PCIe config read
-    
-    // For now, we'll use the configured device type as a proxy
     char deviceID[64];
     snprintf(deviceID, sizeof(deviceID), "%s", g_Config.deviceType);
-    
-    // If custom PCIe ID is set, use that
     if (g_Config.useCustomPCIe && g_Config.customPCIeID[0])
-    {
         strncpy_s(deviceID, g_Config.customPCIeID, 63);
-    }
     
     strcpy_s(g_DiagStatus.deviceID, deviceID);
     
-    // Check for generic IDs
     if (g_Config.warnGenericID && IsGenericDeviceID(deviceID))
     {
         g_DiagStatus.isGenericID = true;
-        
         if (g_Config.autoCloseOnFail)
         {
             g_DiagStatus.lastError = DiagnosticResult::FIRMWARE_GENERIC;
-            strcpy_s(g_DiagStatus.errorMessage, "Generic FPGA device ID detected - Risk of detection");
+            strcpy_s(g_DiagStatus.errorMessage, "Generic FPGA ID - Detection risk");
             return DiagnosticResult::FIRMWARE_GENERIC;
         }
     }
     
-    // Check for leaked IDs
     if (g_Config.warnLeakedID && IsLeakedDeviceID(deviceID))
     {
         g_DiagStatus.isLeakedID = true;
-        
         if (g_Config.autoCloseOnFail)
         {
             g_DiagStatus.lastError = DiagnosticResult::FIRMWARE_LEAKED;
-            strcpy_s(g_DiagStatus.errorMessage, "Leaked FPGA firmware ID detected - High risk of detection");
+            strcpy_s(g_DiagStatus.errorMessage, "Leaked firmware ID - High risk");
             return DiagnosticResult::FIRMWARE_LEAKED;
         }
     }
     
     strcpy_s(g_DiagStatus.firmwareVersion, "OK");
     g_DiagStatus.firmwareCheck = true;
-    
     return DiagnosticResult::SUCCESS;
 #else
     strcpy_s(g_DiagStatus.firmwareVersion, "Simulation");
@@ -268,38 +353,46 @@ DiagnosticResult DiagnosticSystem::CheckFirmwareIntegrity()
 float DiagnosticSystem::MeasureReadSpeed(uintptr_t testAddr, size_t size, int iterations)
 {
 #if DMA_ENABLED
-    if (!g_VMMDLL || !g_DMA_PID || testAddr == 0)
-        return 0;
+    if (!g_VMMDLL || !g_DMA_PID || testAddr == 0) return 0;
     
     std::vector<uint8_t> buffer(size);
-    
     auto start = std::chrono::high_resolution_clock::now();
     
-    for (int i = 0; i < iterations; i++)
+    // Use scatter for speed test
+    VMMDLL_SCATTER_HANDLE hScatter = VMMDLL_Scatter_Initialize(g_VMMDLL, g_DMA_PID, VMMDLL_FLAG_NOCACHE);
+    if (hScatter)
     {
-        VMMDLL_MemReadEx(g_VMMDLL, g_DMA_PID, testAddr, buffer.data(), (DWORD)size, nullptr, 0);
+        for (int i = 0; i < iterations; i++)
+        {
+            VMMDLL_Scatter_Clear(hScatter, g_DMA_PID, VMMDLL_FLAG_NOCACHE);
+            VMMDLL_Scatter_Prepare(hScatter, testAddr, (DWORD)size);
+            VMMDLL_Scatter_Execute(hScatter);
+            VMMDLL_Scatter_Read(hScatter, testAddr, (DWORD)size, buffer.data(), nullptr);
+        }
+        VMMDLL_Scatter_CloseHandle(hScatter);
+    }
+    else
+    {
+        for (int i = 0; i < iterations; i++)
+            VMMDLL_MemReadEx(g_VMMDLL, g_DMA_PID, testAddr, buffer.data(), (DWORD)size, nullptr, 0);
     }
     
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
     
-    // Calculate MB/s
     double totalBytes = (double)size * iterations;
     double seconds = duration / 1000000.0;
-    double mbps = (totalBytes / (1024.0 * 1024.0)) / seconds;
-    
-    return (float)mbps;
+    return (float)((totalBytes / (1024.0 * 1024.0)) / seconds);
 #else
     (void)testAddr; (void)size; (void)iterations;
-    return 100.0f;  // Simulation always fast
+    return 100.0f;
 #endif
 }
 
 int DiagnosticSystem::MeasureLatency(uintptr_t testAddr, int iterations)
 {
 #if DMA_ENABLED
-    if (!g_VMMDLL || !g_DMA_PID || testAddr == 0)
-        return 99999;
+    if (!g_VMMDLL || !g_DMA_PID || testAddr == 0) return 99999;
     
     uint64_t value;
     int64_t totalLatency = 0;
@@ -309,23 +402,19 @@ int DiagnosticSystem::MeasureLatency(uintptr_t testAddr, int iterations)
         auto start = std::chrono::high_resolution_clock::now();
         VMMDLL_MemReadEx(g_VMMDLL, g_DMA_PID, testAddr, (PBYTE)&value, sizeof(value), nullptr, 0);
         auto end = std::chrono::high_resolution_clock::now();
-        
         totalLatency += std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
     }
     
     return (int)(totalLatency / iterations);
 #else
     (void)testAddr; (void)iterations;
-    return 100;  // Simulation low latency
+    return 100;
 #endif
 }
 
 DiagnosticResult DiagnosticSystem::CheckMemorySpeed()
 {
     g_DiagStatus.speedTest = false;
-    g_DiagStatus.readSpeedMBps = 0;
-    g_DiagStatus.latencyUs = 0;
-    g_DiagStatus.speedSufficient = false;
     
 #if DMA_ENABLED
     if (!g_VMMDLL || !g_DMA_PID)
@@ -334,7 +423,6 @@ DiagnosticResult DiagnosticSystem::CheckMemorySpeed()
         return DiagnosticResult::DEVICE_NOT_FOUND;
     }
     
-    // Use base address as test location
     uintptr_t testAddr = DMAEngine::GetBaseAddress();
     if (testAddr == 0)
     {
@@ -342,13 +430,8 @@ DiagnosticResult DiagnosticSystem::CheckMemorySpeed()
         return DiagnosticResult::BASE_ADDRESS_FAIL;
     }
     
-    // Measure read speed (read 4KB, 100 times)
     g_DiagStatus.readSpeedMBps = MeasureReadSpeed(testAddr, 4096, 100);
-    
-    // Measure latency (8 byte read, 50 times)
     g_DiagStatus.latencyUs = MeasureLatency(testAddr, 50);
-    
-    // Check if speed is sufficient
     g_DiagStatus.speedSufficient = (g_DiagStatus.readSpeedMBps >= g_Config.minSpeedMBps &&
                                      g_DiagStatus.latencyUs <= g_Config.maxLatencyUs);
     
@@ -356,7 +439,7 @@ DiagnosticResult DiagnosticSystem::CheckMemorySpeed()
     {
         g_DiagStatus.lastError = DiagnosticResult::SPEED_TOO_SLOW;
         snprintf(g_DiagStatus.errorMessage, sizeof(g_DiagStatus.errorMessage),
-                 "DMA speed insufficient: %.1f MB/s (min: %.1f), latency: %d us (max: %d)",
+                 "Speed: %.1f MB/s (min: %.1f), Latency: %d us (max: %d)",
                  g_DiagStatus.readSpeedMBps, g_Config.minSpeedMBps,
                  g_DiagStatus.latencyUs, g_Config.maxLatencyUs);
         return DiagnosticResult::SPEED_TOO_SLOW;
@@ -365,7 +448,6 @@ DiagnosticResult DiagnosticSystem::CheckMemorySpeed()
     g_DiagStatus.speedTest = true;
     return DiagnosticResult::SUCCESS;
 #else
-    // Simulation mode - fake good results
     g_DiagStatus.readSpeedMBps = 150.0f;
     g_DiagStatus.latencyUs = 50;
     g_DiagStatus.speedSufficient = true;
@@ -386,47 +468,42 @@ DiagnosticResult DiagnosticSystem::CheckProcessAccess()
         return DiagnosticResult::DEVICE_NOT_FOUND;
     }
     
-    // Find target process
     if (!VMMDLL_PidGetFromName(g_VMMDLL, (LPSTR)g_Config.processName, &g_DMA_PID) || g_DMA_PID == 0)
     {
         g_DiagStatus.lastError = DiagnosticResult::PROCESS_NOT_FOUND;
         snprintf(g_DiagStatus.errorMessage, sizeof(g_DiagStatus.errorMessage),
-                 "Process '%s' not found - Make sure the game is running", g_Config.processName);
+                 "Process '%s' not found", g_Config.processName);
         return DiagnosticResult::PROCESS_NOT_FOUND;
     }
     
     g_DiagStatus.processFound = true;
     
-    // Get base address
     DMAEngine::s_BaseAddress = VMMDLL_ProcessGetModuleBase(g_VMMDLL, g_DMA_PID, (LPSTR)g_Config.processName);
     if (DMAEngine::s_BaseAddress == 0)
     {
         g_DiagStatus.lastError = DiagnosticResult::BASE_ADDRESS_FAIL;
-        strcpy_s(g_DiagStatus.errorMessage, "Failed to get module base address");
+        strcpy_s(g_DiagStatus.errorMessage, "Failed to get module base");
         return DiagnosticResult::BASE_ADDRESS_FAIL;
     }
     
-    // Test memory read
+    // Test read using scatter
     uint64_t testValue = 0;
-    if (!VMMDLL_MemReadEx(g_VMMDLL, g_DMA_PID, DMAEngine::s_BaseAddress, 
-                          (PBYTE)&testValue, sizeof(testValue), nullptr, 0))
+    VMMDLL_SCATTER_HANDLE hScatter = VMMDLL_Scatter_Initialize(g_VMMDLL, g_DMA_PID, VMMDLL_FLAG_NOCACHE);
+    if (hScatter)
     {
-        g_DiagStatus.lastError = DiagnosticResult::MEMORY_READ_FAIL;
-        strcpy_s(g_DiagStatus.errorMessage, "Memory read test failed");
-        return DiagnosticResult::MEMORY_READ_FAIL;
+        VMMDLL_Scatter_Prepare(hScatter, DMAEngine::s_BaseAddress, sizeof(testValue));
+        VMMDLL_Scatter_Execute(hScatter);
+        VMMDLL_Scatter_Read(hScatter, DMAEngine::s_BaseAddress, sizeof(testValue), (PBYTE)&testValue, nullptr);
+        VMMDLL_Scatter_CloseHandle(hScatter);
     }
-    
-    // Verify we read something (PE header should have MZ signature)
-    if ((testValue & 0xFFFF) != 0x5A4D)  // 'MZ'
+    else
     {
-        // Not a fatal error, but suspicious
-        // Continue anyway
+        VMMDLL_MemReadEx(g_VMMDLL, g_DMA_PID, DMAEngine::s_BaseAddress, (PBYTE)&testValue, sizeof(testValue), nullptr, 0);
     }
     
     g_DiagStatus.memoryAccess = true;
     return DiagnosticResult::SUCCESS;
 #else
-    // Simulation mode
     g_DiagStatus.processFound = true;
     g_DiagStatus.memoryAccess = true;
     DMAEngine::s_BaseAddress = 0x140000000;
@@ -437,9 +514,7 @@ DiagnosticResult DiagnosticSystem::CheckProcessAccess()
 bool DiagnosticSystem::RunAllDiagnostics()
 {
     memset(&g_DiagStatus, 0, sizeof(g_DiagStatus));
-    g_DiagStatus.allChecksPassed = false;
     
-    // Check 1: Device Handshake
     DiagnosticResult result = CheckDeviceHandshake();
     if (result != DiagnosticResult::SUCCESS)
     {
@@ -447,70 +522,55 @@ bool DiagnosticSystem::RunAllDiagnostics()
         {
             ShowErrorPopup("DMA Device Not Found", 
                           "No DMA device detected.\n\n"
-                          "Please ensure:\n"
-                          "1. FPGA device is connected\n"
-                          "2. Drivers are installed\n"
-                          "3. Device is not in use by another program");
+                          "1. Check FPGA connection\n"
+                          "2. Install drivers\n"
+                          "3. Close other DMA programs");
             SelfDestruct(GetErrorString(result));
         }
         return false;
     }
     
-    // Check 2: Firmware Integrity
     result = CheckFirmwareIntegrity();
     if (result != DiagnosticResult::SUCCESS)
     {
         if (g_Config.autoCloseOnFail)
         {
             char msg[512];
-            snprintf(msg, sizeof(msg),
-                    "Firmware security check failed.\n\n"
-                    "Device ID: %s\n"
-                    "Issue: %s\n\n"
-                    "Using generic or leaked firmware IDs increases detection risk.",
+            snprintf(msg, sizeof(msg), "Firmware check failed.\n\nDevice ID: %s\nIssue: %s",
                     g_DiagStatus.deviceID, GetErrorString(result));
-            ShowErrorPopup("Firmware Security Warning", msg);
+            ShowErrorPopup("Firmware Warning", msg);
             SelfDestruct(GetErrorString(result));
         }
         return false;
     }
     
-    // Check 3: Process Access
     result = CheckProcessAccess();
     if (result != DiagnosticResult::SUCCESS)
     {
-        if (g_Config.autoCloseOnFail && result != DiagnosticResult::PROCESS_NOT_FOUND)
-        {
-            SelfDestruct(GetErrorString(result));
-        }
-        // For process not found, we'll run in simulation mode
         if (result == DiagnosticResult::PROCESS_NOT_FOUND)
         {
             DMAEngine::s_SimulationMode = true;
         }
+        else if (g_Config.autoCloseOnFail)
+        {
+            SelfDestruct(GetErrorString(result));
+        }
     }
     
-    // Check 4: Memory Speed Test
     result = CheckMemorySpeed();
     if (result != DiagnosticResult::SUCCESS)
     {
         if (g_Config.autoCloseOnFail)
         {
             char msg[512];
-            snprintf(msg, sizeof(msg),
-                    "DMA performance is too slow for reliable radar.\n\n"
-                    "Speed: %.1f MB/s (minimum: %.1f MB/s)\n"
-                    "Latency: %d us (maximum: %d us)\n\n"
-                    "This may cause lag or missed data.",
-                    g_DiagStatus.readSpeedMBps, g_Config.minSpeedMBps,
-                    g_DiagStatus.latencyUs, g_Config.maxLatencyUs);
+            snprintf(msg, sizeof(msg), "DMA performance insufficient.\n\nSpeed: %.1f MB/s\nLatency: %d us",
+                    g_DiagStatus.readSpeedMBps, g_DiagStatus.latencyUs);
             ShowErrorPopup("Performance Warning", msg);
             SelfDestruct(GetErrorString(result));
         }
         return false;
     }
     
-    // All checks passed!
     g_DiagStatus.allChecksPassed = true;
     return true;
 }
@@ -528,9 +588,7 @@ bool LoadConfig(const char* filename)
         if (!file.is_open()) return false;
     }
     
-    std::string line;
-    std::string section;
-    
+    std::string line, section;
     while (std::getline(file, line))
     {
         if (line.empty() || line[0] == ';' || line[0] == '#') continue;
@@ -538,8 +596,7 @@ bool LoadConfig(const char* filename)
         if (line[0] == '[')
         {
             size_t end = line.find(']');
-            if (end != std::string::npos)
-                section = line.substr(1, end - 1);
+            if (end != std::string::npos) section = line.substr(1, end - 1);
             continue;
         }
         
@@ -599,7 +656,6 @@ bool LoadConfig(const char* filename)
             else if (key == "LogReads") g_Config.logReads = (value == "1" || value == "true");
         }
     }
-    
     return true;
 }
 
@@ -608,8 +664,7 @@ bool SaveConfig(const char* filename)
     std::ofstream file(filename);
     if (!file.is_open()) return false;
     
-    file << "; PROJECT ZERO - Configuration File\n";
-    file << "; Pre-Launch Diagnostics & Hardware-ID Masking\n\n";
+    file << "; PROJECT ZERO - Configuration\n\n";
     
     file << "[Device]\n";
     file << "Type=" << g_Config.deviceType << "\n";
@@ -627,7 +682,6 @@ bool SaveConfig(const char* filename)
     file << "UseScatterRegistry=" << (g_Config.useScatterRegistry ? "1" : "0") << "\n\n";
     
     file << "[Diagnostics]\n";
-    file << "; Pre-launch security checks\n";
     file << "EnableDiagnostics=" << (g_Config.enableDiagnostics ? "1" : "0") << "\n";
     file << "AutoCloseOnFail=" << (g_Config.autoCloseOnFail ? "1" : "0") << "\n";
     file << "MinSpeedMBps=" << g_Config.minSpeedMBps << "\n";
@@ -686,7 +740,7 @@ void CreateDefaultConfig(const char* filename)
 }
 
 // ============================================================================
-// SCATTER READ REGISTRY IMPLEMENTATION
+// SCATTER READ REGISTRY - HIGH PERFORMANCE
 // ============================================================================
 void ScatterReadRegistry::RegisterPlayerData(int playerIndex, uintptr_t baseAddr)
 {
@@ -732,11 +786,12 @@ void ScatterReadRegistry::ExecuteAll()
     if (m_Entries.empty()) return;
     m_TransactionCount++;
     
-#if DMA_ENABLED
-    if (DMAEngine::IsOnline())
+    // Use high-performance scatter function
+    ExecuteScatterReads(m_Entries);
+    
+    // Copy data to PlayerManager
+    if (DMAEngine::IsOnline() || DMAEngine::IsConnected())
     {
-        DMAEngine::ExecuteScatter(m_Entries);
-        
         std::lock_guard<std::mutex> lock(PlayerManager::GetMutex());
         auto& players = PlayerManager::GetPlayers();
         auto& local = PlayerManager::GetLocalPlayer();
@@ -764,12 +819,7 @@ void ScatterReadRegistry::ExecuteAll()
             if (raw.name[0] != 0)
                 strncpy_s(p.name, raw.name, 31);
         }
-        return;
     }
-#endif
-    
-    for (auto& entry : m_Entries)
-        if (entry.buffer) memset(entry.buffer, 0, entry.size);
 }
 
 void ScatterReadRegistry::Clear() { m_Entries.clear(); }
@@ -855,14 +905,11 @@ bool DMAEngine::InitializeWithConfig(const DMAConfig& config)
     strcpy_s(s_StatusText, "INITIALIZING...");
     s_Online = false;
     
-    // Run diagnostics if enabled
     if (config.enableDiagnostics)
     {
         strcpy_s(s_StatusText, "DIAGNOSTICS...");
-        
         if (!DiagnosticSystem::RunAllDiagnostics())
         {
-            // Diagnostics failed
             if (!s_SimulationMode)
             {
                 strcpy_s(s_StatusText, "DIAG FAILED");
@@ -881,24 +928,22 @@ bool DMAEngine::InitializeWithConfig(const DMAConfig& config)
         s_ModuleSize = 0x5000000;
         
         strcpy_s(s_StatusText, s_Online ? "ONLINE" : "LIMITED");
-        snprintf(s_DeviceInfo, sizeof(s_DeviceInfo), "Device: %s | Speed: %.1f MB/s | Latency: %d us",
-                 g_DiagStatus.deviceName, g_DiagStatus.readSpeedMBps, g_DiagStatus.latencyUs);
+        snprintf(s_DeviceInfo, sizeof(s_DeviceInfo), "SCATTER MODE | %.1f MB/s | %d us",
+                 g_DiagStatus.readSpeedMBps, g_DiagStatus.latencyUs);
         
         PatternScanner::UpdateAllOffsets();
         MapTextureManager::InitializeMapDatabase();
-        
         return true;
     }
 #endif
     
-    // Simulation mode
     s_Connected = false;
     s_SimulationMode = true;
     s_Online = false;
     s_BaseAddress = 0x140000000;
     s_ModuleSize = 0x5000000;
     strcpy_s(s_StatusText, "SIMULATION");
-    strcpy_s(s_DeviceInfo, "Demo mode - No DMA hardware");
+    strcpy_s(s_DeviceInfo, "Demo mode - No DMA");
     
     g_Offsets.PlayerBase = s_BaseAddress + 0x17AA8E98;
     g_Offsets.ClientInfo = s_BaseAddress + 0x17AA9000;
@@ -971,18 +1016,7 @@ bool DMAEngine::ReadString(uintptr_t address, char* buffer, size_t maxLen)
 
 void DMAEngine::ExecuteScatter(std::vector<ScatterEntry>& entries)
 {
-    if (entries.empty()) return;
-#if DMA_ENABLED
-    if (s_Connected && g_VMMDLL && g_DMA_PID)
-    {
-        for (auto& entry : entries)
-            if (entry.buffer && entry.address && entry.size > 0)
-                VMMDLL_MemReadEx(g_VMMDLL, g_DMA_PID, entry.address, (PBYTE)entry.buffer, (DWORD)entry.size, nullptr, VMMDLL_FLAG_NOCACHE);
-        return;
-    }
-#endif
-    for (auto& entry : entries)
-        if (entry.buffer) memset(entry.buffer, 0, entry.size);
+    ExecuteScatterReads(entries);
 }
 
 uintptr_t DMAEngine::GetBaseAddress() { return s_BaseAddress; }
@@ -1124,11 +1158,23 @@ void PlayerManager::UpdateWithScatterRegistry()
     if (!s_Initialized) Initialize();
     
 #if DMA_ENABLED
-    if (DMAEngine::IsOnline() && g_Offsets.EntityList)
+    if ((DMAEngine::IsOnline() || DMAEngine::IsConnected()) && g_Offsets.EntityList)
     {
         g_ScatterRegistry.Clear();
+        
+        // Register all player data for batch read
         for (size_t i = 0; i < s_Players.size(); i++)
             g_ScatterRegistry.RegisterPlayerData((int)i, g_Offsets.EntityList + i * GameOffsets::EntitySize);
+        
+        // Register local player
+        if (g_Offsets.ClientInfo)
+        {
+            uintptr_t clientBase = DMAEngine::Read<uintptr_t>(g_Offsets.ClientInfo);
+            if (clientBase)
+                g_ScatterRegistry.RegisterLocalPlayer(clientBase);
+        }
+        
+        // Execute ALL reads in ONE DMA transaction
         g_ScatterRegistry.ExecuteAll();
         return;
     }

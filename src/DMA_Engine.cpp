@@ -1,5 +1,5 @@
-// DMA_Engine.cpp - STRICT Hardware Validation v4.1
-// Real DMA Check, Real KMBox Handshake, No Fake Status
+// DMA_Engine.cpp - FULL AUTO-LAUNCH v4.2
+// Plug & Play - No User Input Required
 
 #include "DMA_Engine.hpp"
 #include <cstring>
@@ -21,7 +21,7 @@
 #endif
 
 // ============================================================================
-// DMA LIBRARY - STRICT LINKING
+// DMA LIBRARY
 // ============================================================================
 #if DMA_ENABLED
 #include "vmmdll.h"
@@ -31,13 +31,14 @@ static DWORD g_GamePID = 0;
 #endif
 
 // ============================================================================
-// HARDWARE STATUS - REAL VALUES ONLY
+// HARDWARE STATUS
 // ============================================================================
 static bool g_DMA_Online = false;
 static bool g_KMBox_Connected = false;
-static char g_DMA_StatusStr[32] = "OFFLINE";
-static char g_KMBox_StatusStr[32] = "NOT FOUND";
+static char g_DMA_StatusStr[32] = "SCANNING...";
+static char g_KMBox_StatusStr[32] = "SCANNING...";
 static char g_LockedCOMPort[16] = "";
+static bool g_HardwareScanComplete = false;
 
 // ============================================================================
 // GLOBAL INSTANCES
@@ -61,9 +62,9 @@ bool DMAEngine::s_SimulationMode = false;
 bool DMAEngine::s_UsingFTD3XX = false;
 uintptr_t DMAEngine::s_BaseAddress = 0;
 size_t DMAEngine::s_ModuleSize = 0;
-char DMAEngine::s_StatusText[64] = "OFFLINE";
-char DMAEngine::s_DeviceInfo[128] = "No Device";
-char DMAEngine::s_DriverMode[32] = "Standard";
+char DMAEngine::s_StatusText[64] = "INITIALIZING";
+char DMAEngine::s_DeviceInfo[128] = "Scanning...";
+char DMAEngine::s_DriverMode[32] = "Auto";
 
 bool PatternScanner::s_Scanned = false;
 int PatternScanner::s_FoundCount = 0;
@@ -98,190 +99,144 @@ int Aimbot::s_CurrentTarget = -1;
 Vec2 Aimbot::s_LastAimPos = {0, 0};
 
 // ============================================================================
-// LOGGER - CONSOLE OUTPUT
+// LOGGER - SILENT MODE (No Console Unless Critical Failure)
 // ============================================================================
-void Logger::Initialize()
-{
-    if (s_Initialized) return;
-#ifdef _WIN32
-    AllocConsole();
-    s_Console = GetStdHandle(STD_OUTPUT_HANDLE);
-    SetConsoleTitleW(L"PROJECT ZERO | Hardware Validation");
-    
-    DWORD mode = 0;
-    GetConsoleMode(s_Console, &mode);
-    SetConsoleMode(s_Console, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-    
-    FILE* fp;
-    freopen_s(&fp, "CONOUT$", "w", stdout);
-    freopen_s(&fp, "CONIN$", "r", stdin);
-    s_Initialized = true;
-#endif
-}
-
-void Logger::Shutdown() { if (s_Initialized) { FreeConsole(); s_Initialized = false; } }
-void Logger::ShowConsole() { HWND c = GetConsoleWindow(); if (c) ShowWindow(c, SW_SHOW); }
-void Logger::HideConsole() { HWND c = GetConsoleWindow(); if (c) ShowWindow(c, SW_HIDE); }
-
-void Logger::SetColor(ConsoleColor c) { if (s_Console) SetConsoleTextAttribute((HANDLE)s_Console, c); }
-void Logger::ResetColor() { SetColor(COLOR_DEFAULT); }
-
-void Logger::Log(const char* m, ConsoleColor c) { SetColor(c); printf("%s", m); ResetColor(); fflush(stdout); }
-void Logger::LogSuccess(const char* m) { SetColor(COLOR_GREEN); printf("[+] "); ResetColor(); printf("%s\n", m); fflush(stdout); }
-void Logger::LogError(const char* m) { SetColor(COLOR_RED); printf("[X] "); ResetColor(); printf("%s\n", m); fflush(stdout); }
-void Logger::LogWarning(const char* m) { SetColor(COLOR_YELLOW); printf("[!] "); ResetColor(); printf("%s\n", m); fflush(stdout); }
-void Logger::LogInfo(const char* m) { SetColor(COLOR_CYAN); printf("[>] "); ResetColor(); printf("%s\n", m); fflush(stdout); }
-
-void Logger::LogStatus(const char* label, const char* value, bool ok)
-{
-    printf("    ");
-    SetColor(ok ? COLOR_GREEN : COLOR_RED);
-    printf("[%c] ", ok ? '+' : 'X');
-    ResetColor();
-    printf("%-16s: ", label);
-    SetColor(ok ? COLOR_GREEN : COLOR_RED);
-    printf("%s\n", value);
-    ResetColor();
-    fflush(stdout);
-}
-
-void Logger::LogProgress(const char* m, int c, int t) { SetColor(COLOR_CYAN); printf("[%d/%d] ", c, t); ResetColor(); printf("%s\n", m); fflush(stdout); }
-
-void Logger::LogBanner()
-{
-    SetColor(COLOR_RED);
-    printf("\n");
-    printf("  ============================================\n");
-    printf("  ||");
-    SetColor(COLOR_WHITE);
-    printf("  P R O J E C T   Z E R O  |  v4.1    ");
-    SetColor(COLOR_RED);
-    printf("||\n");
-    printf("  ============================================\n");
-    printf("\n");
-    ResetColor();
-    fflush(stdout);
-}
-
-void Logger::LogSection(const char* t) { printf("\n"); SetColor(COLOR_MAGENTA); printf("=== %s ===\n", t); ResetColor(); fflush(stdout); }
-void Logger::LogSeparator() { SetColor(COLOR_GRAY); printf("--------------------------------------------\n"); ResetColor(); fflush(stdout); }
-void Logger::LogTimestamp() { time_t n = time(nullptr); struct tm t; localtime_s(&t, &n); char b[16]; strftime(b, 16, "%H:%M:%S", &t); SetColor(COLOR_GRAY); printf("[%s] ", b); ResetColor(); }
-void Logger::LogSpinner(const char* m, int f) { printf("\r    [%c] %s", "|/-\\"[f%4], m); fflush(stdout); }
-void Logger::ClearLine() { printf("\r                                            \r"); fflush(stdout); }
+void Logger::Initialize() { s_Initialized = true; }
+void Logger::Shutdown() { s_Initialized = false; }
+void Logger::ShowConsole() {}
+void Logger::HideConsole() {}
+void Logger::SetColor(ConsoleColor) {}
+void Logger::ResetColor() {}
+void Logger::Log(const char*, ConsoleColor) {}
+void Logger::LogSuccess(const char*) {}
+void Logger::LogError(const char*) {}
+void Logger::LogWarning(const char*) {}
+void Logger::LogInfo(const char*) {}
+void Logger::LogStatus(const char*, const char*, bool) {}
+void Logger::LogProgress(const char*, int, int) {}
+void Logger::LogBanner() {}
+void Logger::LogSection(const char*) {}
+void Logger::LogSeparator() {}
+void Logger::LogTimestamp() {}
+void Logger::LogSpinner(const char*, int) {}
+void Logger::ClearLine() {}
 
 // ============================================================================
-// REAL DMA HARDWARE CHECK - NO FAKE STATUS
+// SILENT DMA SCAN (Background)
 // ============================================================================
-bool RealDMAHardwareCheck()
+bool SilentDMAScan()
 {
 #if DMA_ENABLED
-    Logger::LogInfo("Connecting to DMA hardware...");
-    
-    // Build VMMDLL arguments
     char arg0[] = "";
     char arg1[] = "-device";
     char arg2[] = "fpga";
     char* args[3] = { arg0, arg1, arg2 };
     
-    // REAL CALL: VMMDLL_Initialize
     g_VMMHandle = VMMDLL_Initialize(3, args);
     
-    if (g_VMMHandle == NULL)
+    if (g_VMMHandle != NULL)
     {
-        // DMA HARDWARE NOT RESPONDING
-        g_DMA_Online = false;
-        strcpy_s(g_DMA_StatusStr, "OFFLINE");
-        strcpy_s(DMAEngine::s_StatusText, "OFFLINE");
-        strcpy_s(DMAEngine::s_DeviceInfo, "NOT RESPONDING");
-        Logger::LogError("DMA HARDWARE NOT RESPONDING");
-        return false;
-    }
-    
-    // DMA is ONLINE
-    g_DMA_Online = true;
-    strcpy_s(g_DMA_StatusStr, "ONLINE");
-    strcpy_s(DMAEngine::s_StatusText, "ONLINE");
-    strcpy_s(DMAEngine::s_DeviceInfo, "FPGA Connected");
-    DMAEngine::s_Connected = true;
-    DMAEngine::s_Online = true;
-    
-    Logger::LogSuccess("DMA hardware connected!");
-    return true;
-#else
-    strcpy_s(g_DMA_StatusStr, "DISABLED");
-    Logger::LogWarning("DMA disabled at compile time");
-    return false;
-#endif
-}
-
-// ============================================================================
-// REAL KMBOX HANDSHAKE - NO FAKE CONNECTION
-// ============================================================================
-bool SendKMBoxHandshake(HANDLE hPort)
-{
-#ifdef _WIN32
-    // Clear any pending data
-    PurgeComm(hPort, PURGE_RXCLEAR | PURGE_TXCLEAR);
-    
-    // Send handshake command
-    const char* handshake = "km.version()\r\n";
-    DWORD written = 0;
-    
-    if (!WriteFile(hPort, handshake, (DWORD)strlen(handshake), &written, nullptr))
-        return false;
-    
-    // Wait for response
-    Sleep(150);
-    
-    // Read response
-    char response[256] = {};
-    DWORD bytesRead = 0;
-    ReadFile(hPort, response, sizeof(response) - 1, &bytesRead, nullptr);
-    
-    // KMBox MUST reply to be considered connected
-    if (bytesRead == 0)
-        return false;
-    
-    // Check for valid KMBox response
-    // KMBox typically responds with version info or "OK"
-    if (strstr(response, "km") != nullptr ||
-        strstr(response, "KM") != nullptr ||
-        strstr(response, "OK") != nullptr ||
-        strstr(response, "ver") != nullptr ||
-        bytesRead > 5)  // Any substantial response
-    {
+        g_DMA_Online = true;
+        strcpy_s(g_DMA_StatusStr, "ONLINE");
+        strcpy_s(DMAEngine::s_StatusText, "ONLINE");
+        strcpy_s(DMAEngine::s_DeviceInfo, "FPGA Connected");
+        DMAEngine::s_Connected = true;
+        DMAEngine::s_Online = true;
         return true;
     }
-    
-    return false;
-#else
-    return false;
 #endif
+    
+    g_DMA_Online = false;
+    strcpy_s(g_DMA_StatusStr, "OFFLINE");
+    strcpy_s(DMAEngine::s_StatusText, "SIMULATION");
+    DMAEngine::s_SimulationMode = true;
+    return false;
 }
 
-bool RealKMBoxAutoDetect()
+// ============================================================================
+// LOAD SAVED CONFIG (Silent)
+// ============================================================================
+bool LoadSavedKMBoxConfig()
 {
 #ifdef _WIN32
-    Logger::LogInfo("Scanning COM ports for KMBox...");
+    std::ifstream configFile("config.ini");
+    if (!configFile.is_open()) return false;
     
-    // Loop through ALL COM ports
+    std::string line;
+    char savedPort[16] = {};
+    
+    while (std::getline(configFile, line))
+    {
+        if (line.find("KMBoxPort=") == 0)
+        {
+            strncpy_s(savedPort, line.substr(10).c_str(), sizeof(savedPort) - 1);
+            char* nl = strchr(savedPort, '\r'); if (nl) *nl = 0;
+            nl = strchr(savedPort, '\n'); if (nl) *nl = 0;
+        }
+    }
+    
+    if (savedPort[0] != 0)
+    {
+        char fullPath[32];
+        snprintf(fullPath, sizeof(fullPath), "\\\\.\\%s", savedPort);
+        
+        HANDLE hPort = CreateFileA(fullPath, GENERIC_READ | GENERIC_WRITE,
+                                    0, nullptr, OPEN_EXISTING, 0, nullptr);
+        
+        if (hPort != INVALID_HANDLE_VALUE)
+        {
+            DCB dcb = {};
+            dcb.DCBlength = sizeof(DCB);
+            GetCommState(hPort, &dcb);
+            dcb.BaudRate = 115200;
+            dcb.ByteSize = 8;
+            dcb.Parity = NOPARITY;
+            dcb.StopBits = ONESTOPBIT;
+            SetCommState(hPort, &dcb);
+            
+            COMMTIMEOUTS timeouts = {};
+            timeouts.ReadIntervalTimeout = 50;
+            timeouts.ReadTotalTimeoutConstant = 100;
+            SetCommTimeouts(hPort, &timeouts);
+            
+            HardwareController::s_Handle = hPort;
+            HardwareController::s_Connected = true;
+            HardwareController::s_Type = ControllerType::KMBOX_B_PLUS;
+            strcpy_s(HardwareController::s_LockedPort, savedPort);
+            strcpy_s(g_LockedCOMPort, savedPort);
+            snprintf(HardwareController::s_DeviceName, sizeof(HardwareController::s_DeviceName), 
+                     "KMBox [%s]", savedPort);
+            g_KMBox_Connected = true;
+            strcpy_s(g_KMBox_StatusStr, "AUTO-LOCKED");
+            return true;
+        }
+    }
+#endif
+    return false;
+}
+
+// ============================================================================
+// SILENT COM PORT SCAN (Background, No Pop-ups)
+// ============================================================================
+bool SilentKMBoxScan()
+{
+#ifdef _WIN32
+    // First try saved config
+    if (LoadSavedKMBoxConfig())
+        return true;
+    
+    // Silent auto-scan
     for (int portNum = 1; portNum <= 20; portNum++)
     {
-        char portName[16];
-        snprintf(portName, sizeof(portName), "COM%d", portNum);
-        
         char fullPath[32];
-        snprintf(fullPath, sizeof(fullPath), "\\\\.\\%s", portName);
+        snprintf(fullPath, sizeof(fullPath), "\\\\.\\COM%d", portNum);
         
-        // Try to open port
-        HANDLE hPort = CreateFileA(fullPath, 
-                                   GENERIC_READ | GENERIC_WRITE,
-                                   0, nullptr, OPEN_EXISTING, 0, nullptr);
+        HANDLE hPort = CreateFileA(fullPath, GENERIC_READ | GENERIC_WRITE,
+                                    0, nullptr, OPEN_EXISTING, 0, nullptr);
         
         if (hPort == INVALID_HANDLE_VALUE)
-            continue;  // Port not available
+            continue;
         
-        // Configure serial port for KMBox
         DCB dcb = {};
         dcb.DCBlength = sizeof(DCB);
         GetCommState(hPort, &dcb);
@@ -290,7 +245,6 @@ bool RealKMBoxAutoDetect()
         dcb.Parity = NOPARITY;
         dcb.StopBits = ONESTOPBIT;
         dcb.fDtrControl = DTR_CONTROL_ENABLE;
-        dcb.fRtsControl = RTS_CONTROL_ENABLE;
         
         if (!SetCommState(hPort, &dcb))
         {
@@ -298,22 +252,30 @@ bool RealKMBoxAutoDetect()
             continue;
         }
         
-        // Set timeouts
         COMMTIMEOUTS timeouts = {};
         timeouts.ReadIntervalTimeout = 50;
-        timeouts.ReadTotalTimeoutConstant = 200;
+        timeouts.ReadTotalTimeoutConstant = 150;
         timeouts.ReadTotalTimeoutMultiplier = 10;
-        timeouts.WriteTotalTimeoutConstant = 200;
         SetCommTimeouts(hPort, &timeouts);
         
-        // REAL HANDSHAKE - Device MUST reply
-        printf("    Checking %s... ", portName);
-        fflush(stdout);
+        // Silent handshake
+        PurgeComm(hPort, PURGE_RXCLEAR | PURGE_TXCLEAR);
         
-        if (SendKMBoxHandshake(hPort))
+        const char* ping = "km.version()\r\n";
+        DWORD written = 0;
+        WriteFile(hPort, ping, (DWORD)strlen(ping), &written, nullptr);
+        
+        Sleep(100);
+        
+        char response[128] = {};
+        DWORD bytesRead = 0;
+        ReadFile(hPort, response, sizeof(response) - 1, &bytesRead, nullptr);
+        
+        if (bytesRead > 0)
         {
-            // DEVICE ACTUALLY REPLIED
-            printf("FOUND!\n");
+            // Found KMBox - lock it silently
+            char portName[16];
+            snprintf(portName, sizeof(portName), "COM%d", portNum);
             
             HardwareController::s_Handle = hPort;
             HardwareController::s_Connected = true;
@@ -321,51 +283,43 @@ bool RealKMBoxAutoDetect()
             strcpy_s(HardwareController::s_LockedPort, portName);
             strcpy_s(g_LockedCOMPort, portName);
             snprintf(HardwareController::s_DeviceName, sizeof(HardwareController::s_DeviceName), 
-                     "KMBox B+ [%s]", portName);
-            
+                     "KMBox [%s]", portName);
             g_KMBox_Connected = true;
             strcpy_s(g_KMBox_StatusStr, "AUTO-LOCKED");
             
-            Logger::LogSuccess("KMBox detected and locked!");
+            // Save to config for next time
+            std::ofstream configFile("config.ini");
+            if (configFile.is_open())
+            {
+                configFile << "[Hardware]\n";
+                configFile << "KMBoxPort=" << portName << "\n";
+                configFile.close();
+            }
+            
             return true;
         }
-        else
-        {
-            printf("No response\n");
-            CloseHandle(hPort);
-        }
+        
+        CloseHandle(hPort);
     }
+#endif
     
-    // No KMBox found
     g_KMBox_Connected = false;
     strcpy_s(g_KMBox_StatusStr, "NOT FOUND");
-    Logger::LogWarning("No KMBox detected on any COM port");
     return false;
-#else
-    return false;
-#endif
 }
 
 // ============================================================================
 // HARDWARE CONTROLLER
 // ============================================================================
-bool HardwareController::Initialize()
-{
-    return RealKMBoxAutoDetect();
-}
+bool HardwareController::Initialize() { return SilentKMBoxScan(); }
 
 void HardwareController::Shutdown()
 {
 #ifdef _WIN32
-    if (s_Handle)
-    {
-        CloseHandle(s_Handle);
-        s_Handle = nullptr;
-    }
+    if (s_Handle) { CloseHandle(s_Handle); s_Handle = nullptr; }
 #endif
     s_Connected = false;
     g_KMBox_Connected = false;
-    strcpy_s(g_KMBox_StatusStr, "DISCONNECTED");
 }
 
 bool HardwareController::IsConnected() { return s_Connected && g_KMBox_Connected; }
@@ -385,7 +339,6 @@ bool HardwareController::MoveMouse(int dx, int dy)
         return true;
     }
 #endif
-    // Fallback to software
     mouse_event(MOUSEEVENTF_MOVE, dx, dy, 0, 0);
     return true;
 }
@@ -404,8 +357,7 @@ bool HardwareController::SerialWrite(const char*, int) { return false; }
 bool HardwareController::SocketSend(const char*, int) { return false; }
 
 // ============================================================================
-// SCATTER READS - FIXED C2664 ERROR
-// PVMMDLL_SCATTER_HANDLE is already a pointer type
+// SCATTER READS - FIXED C2664
 // ============================================================================
 void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
 {
@@ -419,14 +371,11 @@ void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
         return;
     }
     
-    // FIXED C2664: PVMMDLL_SCATTER_HANDLE is a pointer type
-    // VMMDLL_Scatter_Initialize returns PVMMDLL_SCATTER_HANDLE directly
+    // FIXED C2664: PVMMDLL_SCATTER_HANDLE is pointer type
     PVMMDLL_SCATTER_HANDLE hScatter = VMMDLL_Scatter_Initialize(g_VMMHandle, g_GamePID, VMMDLL_FLAG_NOCACHE);
     
-    // Check for NULL (pointer comparison)
     if (hScatter == NULL)
     {
-        // Fallback to individual reads
         for (auto& e : entries)
         {
             if (e.buffer && e.address != 0 && e.size > 0)
@@ -438,14 +387,12 @@ void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
         return;
     }
     
-    // Prepare all reads
     for (auto& e : entries)
     {
         if (e.address != 0 && e.size > 0 && e.size <= 0x10000)
             VMMDLL_Scatter_Prepare(hScatter, e.address, (DWORD)e.size);
     }
     
-    // Execute scatter read
     if (!VMMDLL_Scatter_Execute(hScatter))
     {
         VMMDLL_Scatter_CloseHandle(hScatter);
@@ -454,7 +401,6 @@ void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
         return;
     }
     
-    // Read results
     for (auto& e : entries)
     {
         if (e.buffer && e.address != 0 && e.size > 0)
@@ -472,7 +418,7 @@ void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
 }
 
 // ============================================================================
-// OFFSET UPDATER
+// OFFSET UPDATER (Silent Background)
 // ============================================================================
 void OffsetUpdater::SetOffsetURL(const char* url) { strncpy_s(s_OffsetURL, url, sizeof(s_OffsetURL) - 1); }
 
@@ -493,10 +439,10 @@ bool OffsetUpdater::HttpGet(const char* url, std::string& response)
     
     if (!WinHttpCrackUrl(urlW, 0, 0, &urlComp)) return false;
     
-    HINTERNET hSession = WinHttpOpen(L"ZeroElite/4.1", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, nullptr, nullptr, 0);
+    HINTERNET hSession = WinHttpOpen(L"ZeroElite/4.2", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, nullptr, nullptr, 0);
     if (!hSession) return false;
     
-    DWORD timeout = 5000;
+    DWORD timeout = 3000;
     WinHttpSetOption(hSession, WINHTTP_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
     
     HINTERNET hConnect = WinHttpConnect(hSession, hostName, urlComp.nPort, 0);
@@ -541,16 +487,10 @@ bool OffsetUpdater::SyncWithCloud(int maxRetries, int retryDelayMs)
 {
     if (s_OffsetURL[0] == 0) strcpy_s(s_OffsetURL, DEFAULT_OFFSET_URL);
     
-    for (int attempt = 0; attempt < maxRetries; attempt++)
+    for (int i = 0; i < maxRetries; i++)
     {
-        if (UpdateOffsetsFromServer())
-        {
-            s_Synced = true;
-            s_Updated = true;
-            return true;
-        }
-        if (attempt < maxRetries - 1)
-            std::this_thread::sleep_for(std::chrono::milliseconds(retryDelayMs));
+        if (UpdateOffsetsFromServer()) { s_Synced = true; s_Updated = true; return true; }
+        if (i < maxRetries - 1) std::this_thread::sleep_for(std::chrono::milliseconds(retryDelayMs));
     }
     return false;
 }
@@ -568,23 +508,17 @@ bool OffsetUpdater::ParseOffsetsTXT(const char* txtData)
     while (std::getline(stream, line))
     {
         if (line.empty() || line[0] == ';' || line[0] == '#' || line[0] == '[') continue;
-        
         size_t eq = line.find('=');
         if (eq == std::string::npos) continue;
         
         std::string key = line.substr(0, eq);
         std::string value = line.substr(eq + 1);
-        
         while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
         while (!value.empty() && value[0] == ' ') value.erase(0, 1);
         while (!value.empty() && (value.back() == '\r' || value.back() == '\n' || value.back() == ' ')) value.pop_back();
-        
         if (key.empty() || value.empty()) continue;
         
-        uintptr_t val = 0;
-        if (value.find("0x") == 0) val = strtoull(value.c_str(), nullptr, 16);
-        else val = strtoull(value.c_str(), nullptr, 10);
-        
+        uintptr_t val = (value.find("0x") == 0) ? strtoull(value.c_str(), nullptr, 16) : strtoull(value.c_str(), nullptr, 10);
         std::string keyLower = key;
         for (auto& c : keyLower) c = (char)tolower(c);
         
@@ -613,62 +547,20 @@ bool OffsetUpdater::ApplyOffsets(const RemoteOffsets& o)
 }
 
 // ============================================================================
-// STRICT HARDWARE VALIDATION
+// FULL AUTO INITIALIZATION (No User Input)
 // ============================================================================
 bool ProfessionalInit::RunProfessionalChecks()
 {
-    Logger::Initialize();
-    Logger::ShowConsole();
     memset(&g_InitStatus, 0, sizeof(g_InitStatus));
     
-    Logger::LogBanner();
-    Logger::LogSeparator();
+    // SILENT DMA SCAN
+    SilentDMAScan();
+    g_InitStatus.dmaConnected = g_DMA_Online;
     
-    // =============================================
-    // STEP 1: DMA HARDWARE CHECK (STRICT)
-    // =============================================
-    Logger::LogSection("DMA HARDWARE");
+    // SILENT KMBOX SCAN
+    HardwareController::Initialize();
     
-    bool dmaOK = RealDMAHardwareCheck();
-    
-    Logger::LogStatus("DMA Status", g_DMA_StatusStr, dmaOK);
-    
-    if (!dmaOK)
-    {
-        Logger::LogSeparator();
-        Logger::LogError("DMA HARDWARE NOT RESPONDING");
-        Logger::LogInfo("Check your FPGA connection and drivers");
-        
-        // Allow simulation mode for testing
-        DMAEngine::s_SimulationMode = true;
-        Logger::LogWarning("Continuing in SIMULATION mode...");
-    }
-    
-    g_InitStatus.dmaConnected = dmaOK;
-    
-    // =============================================
-    // STEP 2: KMBOX AUTO-DETECT (STRICT)
-    // =============================================
-    Logger::LogSection("KMBOX CONTROLLER");
-    
-    bool kmboxOK = HardwareController::Initialize();
-    
-    // Show real status only
-    if (kmboxOK)
-    {
-        Logger::LogStatus("KMBox Status", "AUTO-LOCKED", true);
-        Logger::LogStatus("Locked Port", g_LockedCOMPort, true);
-    }
-    else
-    {
-        Logger::LogStatus("KMBox Status", "NOT FOUND", false);
-    }
-    
-    // =============================================
-    // STEP 3: GAME PROCESS
-    // =============================================
-    Logger::LogSection("GAME PROCESS");
-    
+    // SILENT GAME DETECTION
 #if DMA_ENABLED
     if (g_VMMHandle != NULL)
     {
@@ -678,21 +570,9 @@ bool ProfessionalInit::RunProfessionalChecks()
             g_GamePID = pid;
             DMAEngine::s_BaseAddress = 0x140000000;
             g_InitStatus.gameFound = true;
-            
-            char pidStr[16];
-            snprintf(pidStr, sizeof(pidStr), "PID %d", pid);
-            Logger::LogStatus("Game", pidStr, true);
-        }
-        else
-        {
-            Logger::LogStatus("Game", "Not Running", false);
         }
     }
-    else
 #endif
-    {
-        Logger::LogStatus("Game", "Waiting...", false);
-    }
     
     if (!g_InitStatus.gameFound)
     {
@@ -700,33 +580,11 @@ bool ProfessionalInit::RunProfessionalChecks()
         g_Offsets.EntityList = DMAEngine::s_BaseAddress + 0x16D5C000;
     }
     
-    // =============================================
-    // SUMMARY
-    // =============================================
-    Logger::LogSeparator();
-    Logger::LogSection("STATUS SUMMARY");
+    // SILENT CLOUD SYNC (Background Thread)
+    std::thread([]() { OffsetUpdater::SyncWithCloud(2, 1000); }).detach();
     
-    // Show REAL status that will appear in menu
-    Logger::LogStatus("DMA", g_DMA_StatusStr, g_DMA_Online);
-    Logger::LogStatus("KMBox", g_KMBox_Connected ? "AUTO-LOCKED" : "NOT FOUND", g_KMBox_Connected);
-    
-    Logger::LogSeparator();
-    
+    g_HardwareScanComplete = true;
     g_InitStatus.allChecksPassed = true;
-    
-    if (dmaOK || kmboxOK)
-    {
-        Logger::LogSuccess("Hardware validation complete!");
-        Sleep(1500);
-        Logger::HideConsole();
-    }
-    else
-    {
-        Logger::LogWarning("No hardware found - Demo mode");
-        Logger::LogInfo("Press ENTER to continue...");
-        getchar();
-        Logger::HideConsole();
-    }
     
     return true;
 }
@@ -751,7 +609,6 @@ void DMAEngine::Shutdown()
     if (g_VMMHandle) { VMMDLL_Close(g_VMMHandle); g_VMMHandle = nullptr; }
 #endif
     HardwareController::Shutdown();
-    Logger::Shutdown();
 }
 
 bool DMAEngine::IsConnected() { return s_Connected || g_DMA_Online; }
@@ -760,9 +617,9 @@ const char* DMAEngine::GetStatus() { return g_DMA_StatusStr; }
 const char* DMAEngine::GetDeviceInfo() { return s_DeviceInfo; }
 const char* DMAEngine::GetDriverMode() { return s_DriverMode; }
 
-// Get REAL KMBox status for menu display
 const char* GetKMBoxStatus() { return g_KMBox_StatusStr; }
 bool IsKMBoxConnected() { return g_KMBox_Connected; }
+bool IsHardwareScanComplete() { return g_HardwareScanComplete; }
 
 template<typename T> T DMAEngine::Read(uintptr_t a)
 {
@@ -832,7 +689,7 @@ void ScatterReadRegistry::Clear() { m_Entries.clear(); }
 int ScatterReadRegistry::GetTotalBytes() const { int t = 0; for (auto& e : m_Entries) t += (int)e.size; return t; }
 
 // ============================================================================
-// MAP TEXTURE (Stub)
+// MAP TEXTURE
 // ============================================================================
 void MapTextureManager::InitializeMapDatabase() {}
 bool MapTextureManager::LoadMapConfig(const char* n) { strcpy_s(s_CurrentMap.name, n); return false; }
@@ -841,10 +698,8 @@ Vec2 MapTextureManager::GameToMapCoords(const Vec3& g) { return Vec2(g.x, g.y); 
 Vec2 MapTextureManager::GameToRadarCoords(const Vec3& g, const Vec3& l, float y, float cx, float cy, float s, float z)
 {
     Vec3 d = g - l; float r = -y * 3.14159f / 180.0f;
-    float rx = d.x * cosf(r) - d.y * sinf(r);
-    float ry = d.x * sinf(r) + d.y * cosf(r);
-    float sc = (s * 0.4f) / (100.0f / z);
-    return Vec2(cx + rx * sc, cy - ry * sc);
+    return Vec2(cx + (d.x * cosf(r) - d.y * sinf(r)) * (s * 0.4f) / (100.0f / z),
+                cy - (d.x * sinf(r) + d.y * cosf(r)) * (s * 0.4f) / (100.0f / z));
 }
 void MapTextureManager::SetMapBounds(const char*, float, float, float, float) {}
 
@@ -868,7 +723,7 @@ void Aimbot::AimAt(const Vec2&, float) {}
 void Aimbot::MoveMouse(int dx, int dy) { HardwareController::MoveMouse(dx, dy); }
 
 // ============================================================================
-// PATTERN SCANNER / DIAGNOSTIC (Stub)
+// PATTERN SCANNER / DIAGNOSTIC
 // ============================================================================
 uintptr_t PatternScanner::FindPattern(uintptr_t, size_t, const char*, const char*) { return 0; }
 uintptr_t PatternScanner::ScanModule(const char*, const char*, const char*) { return 0; }

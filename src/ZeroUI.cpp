@@ -19,8 +19,8 @@ static bool show_teammates = false;
 static bool show_names = false;
 static float radar_size = 200.0f;
 
-// Menu visibility state
-static bool g_MenuVisible = false;
+// Menu visibility state - starts VISIBLE for testing
+static bool g_MenuVisible = true;
 
 // Initialize UI
 void InitializeZeroUI()
@@ -73,8 +73,14 @@ void InitializeZeroUI()
     colors[ImGuiCol_Separator]              = ImVec4(0.30f, 0.30f, 0.30f, 0.50f);
     colors[ImGuiCol_SeparatorHovered]       = ImVec4(0.00f, 0.80f, 0.00f, 1.00f);
     colors[ImGuiCol_SeparatorActive]        = ImVec4(0.00f, 1.00f, 0.00f, 1.00f);
+    colors[ImGuiCol_Tab]                    = ImVec4(0.15f, 0.15f, 0.15f, 1.00f);
+    colors[ImGuiCol_TabHovered]             = ImVec4(0.00f, 0.60f, 0.00f, 0.80f);
+    colors[ImGuiCol_TabActive]              = ImVec4(0.00f, 0.50f, 0.00f, 1.00f);
+    colors[ImGuiCol_TabUnfocused]           = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);
+    colors[ImGuiCol_TabUnfocusedActive]     = ImVec4(0.15f, 0.15f, 0.15f, 1.00f);
 
     std::cout << "[PROJECT ZERO] UI Initialized" << std::endl;
+    std::cout << "[PROJECT ZERO] Menu is OPEN - Press INSERT to toggle" << std::endl;
 }
 
 void ShutdownZeroUI()

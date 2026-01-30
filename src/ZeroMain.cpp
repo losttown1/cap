@@ -192,9 +192,10 @@ bool CreateOverlayWindow()
     int screenWidth = GetSystemMetrics(SM_CXSCREEN);
     int screenHeight = GetSystemMetrics(SM_CYSCREEN);
 
-    // Create window with WS_EX_LAYERED and WS_EX_TRANSPARENT for transparent overlay
+    // Create window - start WITHOUT WS_EX_TRANSPARENT since menu starts visible
+    // UpdateWindowClickthrough() will manage click-through mode
     g_hWnd = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+        WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
         WINDOW_CLASS_NAME,
         WINDOW_TITLE,
         WS_POPUP,
@@ -358,6 +359,9 @@ int APIENTRY wWinMain(
 
     // Initialize Zero Elite UI
     InitializeZeroUI();
+    
+    // Update window style since menu starts visible
+    UpdateWindowClickthrough();
 
     // Initialize DMA Engine
     if (InitializeZeroDMA())

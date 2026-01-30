@@ -163,12 +163,12 @@ bool KeyPressed(int vKey, bool& state)
     return false;
 }
 
-// Hide console window after delay
-void HideConsoleAfterDelay(int seconds)
+// Minimize console window after delay (not hide, so program keeps running)
+void MinimizeConsoleAfterDelay(int seconds)
 {
     Sleep(seconds * 1000);
     HWND console = GetConsoleWindow();
-    if (console) ShowWindow(console, SW_HIDE);
+    if (console) ShowWindow(console, SW_MINIMIZE);
 }
 
 // Main entry point
@@ -187,7 +187,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
     std::cout << "  INSERT = Hide/Show menu only" << std::endl;
     std::cout << "  END    = Exit program" << std::endl;
     std::cout << std::endl;
-    std::cout << ">>> Console will hide in 3 seconds <<<" << std::endl;
+    std::cout << ">>> Console will minimize in 3 seconds <<<" << std::endl;
     std::cout << std::endl;
 
     // Register window class
@@ -264,8 +264,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
     std::cout << ">>> Overlay running! <<<" << std::endl;
     std::cout << std::endl;
 
-    // Hide console after 3 seconds (runs in background)
-    std::thread(HideConsoleAfterDelay, 3).detach();
+    // Minimize console after 3 seconds (runs in background)
+    std::thread(MinimizeConsoleAfterDelay, 3).detach();
 
     // Main loop
     MSG msg;

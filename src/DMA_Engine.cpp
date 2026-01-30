@@ -74,7 +74,9 @@ char HardwareController::s_DeviceName[64] = "None";
 
 RemoteOffsets OffsetUpdater::s_LastOffsets;
 bool OffsetUpdater::s_Updated = false;
+bool OffsetUpdater::s_Synced = false;
 char OffsetUpdater::s_OffsetURL[512] = "";
+char OffsetUpdater::s_LastError[256] = "";
 
 bool Aimbot::s_Enabled = false;
 int Aimbot::s_CurrentTarget = -1;
@@ -609,7 +611,7 @@ bool HardwareController::KeyPress(int keyCode) { (void)keyCode; return false; }
 bool HardwareController::KeyRelease(int keyCode) { (void)keyCode; return false; }
 
 // ============================================================================
-// OFFSET UPDATER IMPLEMENTATION
+// OFFSET UPDATER IMPLEMENTATION - Zero Elite Cloud Sync
 // ============================================================================
 void OffsetUpdater::SetOffsetURL(const char* url)
 {
@@ -620,6 +622,7 @@ bool OffsetUpdater::HttpGet(const char* url, std::string& response)
 {
 #ifdef _WIN32
     response.clear();
+    strcpy_s(s_LastError, "");
     
     // Parse URL
     wchar_t urlW[512];
@@ -629,34 +632,57 @@ bool OffsetUpdater::HttpGet(const char* url, std::string& response)
     urlComp.dwStructSize = sizeof(urlComp);
     
     wchar_t hostName[256] = {};
-    wchar_t urlPath[256] = {};
+    wchar_t urlPath[512] = {};
     urlComp.lpszHostName = hostName;
     urlComp.dwHostNameLength = 256;
     urlComp.lpszUrlPath = urlPath;
-    urlComp.dwUrlPathLength = 256;
+    urlComp.dwUrlPathLength = 512;
     
     if (!WinHttpCrackUrl(urlW, 0, 0, &urlComp))
+    {
+        strcpy_s(s_LastError, "Failed to parse URL");
         return false;
+    }
     
     HINTERNET hSession = WinHttpOpen(L"ZeroElite/3.0",
                                       WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,
                                       WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) return false;
+    if (!hSession) 
+    {
+        strcpy_s(s_LastError, "Failed to open HTTP session");
+        return false;
+    }
     
-    HINTERNET hConnect = WinHttpConnect(hSession, hostName,
-                                         urlComp.nPort, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); return false; }
+    // Set timeouts
+    DWORD timeout = 10000;  // 10 seconds
+    WinHttpSetOption(hSession, WINHTTP_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
+    WinHttpSetOption(hSession, WINHTTP_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
+    
+    HINTERNET hConnect = WinHttpConnect(hSession, hostName, urlComp.nPort, 0);
+    if (!hConnect) 
+    { 
+        strcpy_s(s_LastError, "Failed to connect to server");
+        WinHttpCloseHandle(hSession); 
+        return false; 
+    }
     
     DWORD flags = (urlComp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", urlPath,
                                              nullptr, WINHTTP_NO_REFERER,
                                              WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
-    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return false; }
+    if (!hRequest) 
+    { 
+        strcpy_s(s_LastError, "Failed to create request");
+        WinHttpCloseHandle(hConnect); 
+        WinHttpCloseHandle(hSession); 
+        return false; 
+    }
     
     if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                             WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
     {
+        strcpy_s(s_LastError, "Failed to send request");
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
@@ -665,6 +691,22 @@ bool OffsetUpdater::HttpGet(const char* url, std::string& response)
     
     if (!WinHttpReceiveResponse(hRequest, nullptr))
     {
+        strcpy_s(s_LastError, "No response from server");
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return false;
+    }
+    
+    // Check status code
+    DWORD statusCode = 0;
+    DWORD statusSize = sizeof(statusCode);
+    WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                        WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusSize, WINHTTP_NO_HEADER_INDEX);
+    
+    if (statusCode != 200)
+    {
+        snprintf(s_LastError, sizeof(s_LastError), "HTTP Error %d", statusCode);
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
@@ -683,35 +725,271 @@ bool OffsetUpdater::HttpGet(const char* url, std::string& response)
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
     
-    return !response.empty();
+    if (response.empty())
+    {
+        strcpy_s(s_LastError, "Empty response from server");
+        return false;
+    }
+    
+    return true;
 #else
     (void)url;
     response = "";
+    strcpy_s(s_LastError, "HTTP not supported on this platform");
     return false;
 #endif
 }
 
-bool OffsetUpdater::FetchRemoteOffsets(const char* url)
+bool OffsetUpdater::UpdateOffsetsFromServer()
 {
-    if (!url || !url[0])
-    {
-        url = g_Config.offsetURL;
-    }
+    // Use the Zero Elite Cloud URL
+    const char* url = s_OffsetURL[0] ? s_OffsetURL : DEFAULT_OFFSET_URL;
     
     std::string response;
     if (!HttpGet(url, response))
         return false;
     
-    // Try JSON first, then INI
-    if (response.find('{') != std::string::npos)
+    // Parse the TXT file format
+    return ParseOffsetsTXT(response.c_str());
+}
+
+bool OffsetUpdater::SyncWithCloud(int maxRetries, int retryDelayMs)
+{
+    Logger::LogSection("ZERO ELITE CLOUD SYNC");
+    
+    Logger::LogTimestamp();
+    Logger::LogInfo("Synchronizing with Zero Elite Cloud...");
+    
+    // Use the specific GitHub URL
+    if (s_OffsetURL[0] == 0)
+    {
+        strcpy_s(s_OffsetURL, DEFAULT_OFFSET_URL);
+    }
+    
+    for (int attempt = 1; attempt <= maxRetries; attempt++)
+    {
+        // Show progress animation
+        for (int i = 0; i < 15; i++)
+        {
+            char msg[64];
+            snprintf(msg, sizeof(msg), "Fetching offsets (attempt %d/%d)", attempt, maxRetries);
+            Logger::LogSpinner(msg, i);
+            std::this_thread::sleep_for(std::chrono::milliseconds(80));
+        }
+        Logger::ClearLine();
+        
+        if (UpdateOffsetsFromServer())
+        {
+            Logger::LogTimestamp();
+            Logger::LogSuccess("Offsets loaded from GitHub successfully!");
+            
+            // Show offset details
+            char msg[128];
+            if (s_LastOffsets.buildNumber[0])
+            {
+                snprintf(msg, sizeof(msg), "Game Build: %s", s_LastOffsets.buildNumber);
+                Logger::LogStatus("Build", s_LastOffsets.buildNumber, true);
+            }
+            if (s_LastOffsets.gameVersion[0])
+            {
+                Logger::LogStatus("Version", s_LastOffsets.gameVersion, true);
+            }
+            
+            // Show loaded offsets
+            if (s_LastOffsets.ClientInfo)
+            {
+                snprintf(msg, sizeof(msg), "0x%llX", (unsigned long long)s_LastOffsets.ClientInfo);
+                Logger::LogStatus("ClientInfo", msg, true);
+            }
+            if (s_LastOffsets.EntityList)
+            {
+                snprintf(msg, sizeof(msg), "0x%llX", (unsigned long long)s_LastOffsets.EntityList);
+                Logger::LogStatus("EntityList", msg, true);
+            }
+            if (s_LastOffsets.ViewMatrix)
+            {
+                snprintf(msg, sizeof(msg), "0x%llX", (unsigned long long)s_LastOffsets.ViewMatrix);
+                Logger::LogStatus("ViewMatrix", msg, true);
+            }
+            
+            s_Synced = true;
+            s_Updated = true;
+            strcpy_s(g_InitStatus.gameBuild, s_LastOffsets.buildNumber);
+            g_InitStatus.offsetsUpdated = true;
+            
+            return true;
+        }
+        
+        // Failed - show error and retry
+        Logger::LogTimestamp();
+        char errorMsg[256];
+        snprintf(errorMsg, sizeof(errorMsg), "Server Sync Failed: %s", s_LastError[0] ? s_LastError : "Unknown error");
+        Logger::LogError(errorMsg);
+        
+        if (attempt < maxRetries)
+        {
+            Logger::LogTimestamp();
+            char retryMsg[64];
+            snprintf(retryMsg, sizeof(retryMsg), "Retrying in %d seconds...", retryDelayMs / 1000);
+            Logger::LogWarning(retryMsg);
+            
+            // Wait before retry
+            std::this_thread::sleep_for(std::chrono::milliseconds(retryDelayMs));
+        }
+    }
+    
+    // All retries failed
+    Logger::LogTimestamp();
+    Logger::LogError("Server Sync Failed. Using local defaults.");
+    Logger::LogWarning("Radar and ESP may not work correctly without updated offsets.");
+    
+    s_Synced = false;
+    return false;
+}
+
+bool OffsetUpdater::FetchRemoteOffsets(const char* url)
+{
+    if (!url || !url[0])
+        url = s_OffsetURL[0] ? s_OffsetURL : DEFAULT_OFFSET_URL;
+    
+    std::string response;
+    if (!HttpGet(url, response))
+        return false;
+    
+    // Determine format and parse
+    if (response.find('{') != std::string::npos && response.find('}') != std::string::npos)
         return ParseOffsetsJSON(response.c_str());
+    else if (response.find('=') != std::string::npos)
+        return ParseOffsetsTXT(response.c_str());
     else
         return ParseOffsetsINI(response.c_str());
 }
 
+bool OffsetUpdater::ParseOffsetsTXT(const char* txtData)
+{
+    // Parse TXT format: Key=Value or Key = Value
+    // Also supports comments with ; or #
+    // Also supports hex values like 0x12345678
+    
+    RemoteOffsets offsets = {};
+    int foundCount = 0;
+    
+    std::istringstream stream(txtData);
+    std::string line;
+    
+    while (std::getline(stream, line))
+    {
+        // Skip empty lines and comments
+        if (line.empty()) continue;
+        
+        // Trim leading whitespace
+        size_t start = line.find_first_not_of(" \t");
+        if (start == std::string::npos) continue;
+        line = line.substr(start);
+        
+        // Skip comments
+        if (line[0] == ';' || line[0] == '#' || line[0] == '/') continue;
+        
+        // Skip section headers
+        if (line[0] == '[') continue;
+        
+        // Find = sign
+        size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        
+        std::string key = line.substr(0, eq);
+        std::string value = line.substr(eq + 1);
+        
+        // Trim whitespace
+        while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
+        while (!key.empty() && (key.front() == ' ' || key.front() == '\t')) key.erase(0, 1);
+        while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) value.erase(0, 1);
+        while (!value.empty() && (value.back() == ' ' || value.back() == '\t' || 
+                                   value.back() == '\r' || value.back() == '\n')) value.pop_back();
+        
+        // Remove inline comments
+        size_t commentPos = value.find(';');
+        if (commentPos != std::string::npos) value = value.substr(0, commentPos);
+        commentPos = value.find('#');
+        if (commentPos != std::string::npos) value = value.substr(0, commentPos);
+        commentPos = value.find("//");
+        if (commentPos != std::string::npos) value = value.substr(0, commentPos);
+        
+        // Trim again after removing comments
+        while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) value.pop_back();
+        
+        if (key.empty() || value.empty()) continue;
+        
+        // Parse value - support hex and decimal
+        uintptr_t val = 0;
+        if (value.find("0x") == 0 || value.find("0X") == 0)
+            val = strtoull(value.c_str(), nullptr, 16);
+        else if (isdigit(value[0]))
+            val = strtoull(value.c_str(), nullptr, 10);
+        
+        // Match keys (case-insensitive)
+        std::string keyLower = key;
+        for (auto& c : keyLower) c = (char)tolower(c);
+        
+        if (keyLower == "clientinfo" || keyLower == "client_info" || keyLower == "g_client")
+        {
+            offsets.ClientInfo = val;
+            foundCount++;
+        }
+        else if (keyLower == "entitylist" || keyLower == "entity_list" || keyLower == "g_entity")
+        {
+            offsets.EntityList = val;
+            foundCount++;
+        }
+        else if (keyLower == "viewmatrix" || keyLower == "view_matrix" || keyLower == "refdef")
+        {
+            offsets.ViewMatrix = val;
+            foundCount++;
+        }
+        else if (keyLower == "playerbase" || keyLower == "player_base" || keyLower == "localplayer")
+        {
+            offsets.PlayerBase = val;
+            foundCount++;
+        }
+        else if (keyLower == "bonematrix" || keyLower == "bone_matrix" || keyLower == "bones")
+        {
+            offsets.BoneMatrix = val;
+            foundCount++;
+        }
+        else if (keyLower == "weaponinfo" || keyLower == "weapon_info" || keyLower == "weapon")
+        {
+            offsets.WeaponInfo = val;
+            foundCount++;
+        }
+        else if (keyLower == "version" || keyLower == "game_version")
+        {
+            strncpy_s(offsets.gameVersion, value.c_str(), 31);
+        }
+        else if (keyLower == "build" || keyLower == "build_number" || keyLower == "gamebuild")
+        {
+            strncpy_s(offsets.buildNumber, value.c_str(), 31);
+        }
+        else if (keyLower == "updated" || keyLower == "last_update" || keyLower == "date")
+        {
+            strncpy_s(offsets.lastUpdate, value.c_str(), 31);
+        }
+    }
+    
+    offsets.valid = (foundCount > 0);
+    
+    if (offsets.valid)
+    {
+        s_LastOffsets = offsets;
+        s_Updated = true;
+        return ApplyOffsets(offsets);
+    }
+    
+    strcpy_s(s_LastError, "No valid offsets found in response");
+    return false;
+}
+
 bool OffsetUpdater::ParseOffsetsJSON(const char* jsonData)
 {
-    // Simple JSON parser for offsets
     RemoteOffsets offsets = {};
     
     auto findValue = [&](const char* key) -> uintptr_t {
@@ -775,63 +1053,22 @@ bool OffsetUpdater::ParseOffsetsJSON(const char* jsonData)
 
 bool OffsetUpdater::ParseOffsetsINI(const char* iniData)
 {
-    RemoteOffsets offsets = {};
-    
-    std::istringstream stream(iniData);
-    std::string line;
-    
-    while (std::getline(stream, line))
-    {
-        if (line.empty() || line[0] == ';' || line[0] == '#' || line[0] == '[')
-            continue;
-        
-        size_t eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        
-        std::string key = line.substr(0, eq);
-        std::string value = line.substr(eq + 1);
-        
-        // Trim
-        while (!key.empty() && key.back() == ' ') key.pop_back();
-        while (!value.empty() && (value[0] == ' ' || value[0] == '\r')) value.erase(0, 1);
-        while (!value.empty() && (value.back() == '\r' || value.back() == '\n')) value.pop_back();
-        
-        uintptr_t val = 0;
-        if (value.find("0x") == 0 || value.find("0X") == 0)
-            val = strtoull(value.c_str(), nullptr, 16);
-        else
-            val = strtoull(value.c_str(), nullptr, 10);
-        
-        if (key == "ClientInfo") offsets.ClientInfo = val;
-        else if (key == "EntityList") offsets.EntityList = val;
-        else if (key == "ViewMatrix") offsets.ViewMatrix = val;
-        else if (key == "PlayerBase") offsets.PlayerBase = val;
-        else if (key == "Refdef") offsets.Refdef = val;
-        else if (key == "Version") strncpy_s(offsets.gameVersion, value.c_str(), 31);
-        else if (key == "Build") strncpy_s(offsets.buildNumber, value.c_str(), 31);
-    }
-    
-    offsets.valid = (offsets.ClientInfo != 0 || offsets.EntityList != 0);
-    
-    if (offsets.valid)
-    {
-        s_LastOffsets = offsets;
-        s_Updated = true;
-        return ApplyOffsets(offsets);
-    }
-    
-    return false;
+    // Reuse TXT parser - same format
+    return ParseOffsetsTXT(iniData);
 }
 
 bool OffsetUpdater::ApplyOffsets(const RemoteOffsets& offsets)
 {
-    if (offsets.ClientInfo) g_Offsets.ClientInfo = DMAEngine::GetBaseAddress() + offsets.ClientInfo;
-    if (offsets.EntityList) g_Offsets.EntityList = DMAEngine::GetBaseAddress() + offsets.EntityList;
-    if (offsets.ViewMatrix) g_Offsets.ViewMatrix = DMAEngine::GetBaseAddress() + offsets.ViewMatrix;
-    if (offsets.PlayerBase) g_Offsets.PlayerBase = DMAEngine::GetBaseAddress() + offsets.PlayerBase;
-    if (offsets.Refdef) g_Offsets.Refdef = DMAEngine::GetBaseAddress() + offsets.Refdef;
-    if (offsets.BoneMatrix) g_Offsets.BoneMatrix = DMAEngine::GetBaseAddress() + offsets.BoneMatrix;
-    if (offsets.WeaponInfo) g_Offsets.WeaponInfo = DMAEngine::GetBaseAddress() + offsets.WeaponInfo;
+    uintptr_t baseAddr = DMAEngine::GetBaseAddress();
+    if (baseAddr == 0) baseAddr = 0x140000000;  // Default base for simulation
+    
+    if (offsets.ClientInfo) g_Offsets.ClientInfo = baseAddr + offsets.ClientInfo;
+    if (offsets.EntityList) g_Offsets.EntityList = baseAddr + offsets.EntityList;
+    if (offsets.ViewMatrix) g_Offsets.ViewMatrix = baseAddr + offsets.ViewMatrix;
+    if (offsets.PlayerBase) g_Offsets.PlayerBase = baseAddr + offsets.PlayerBase;
+    if (offsets.Refdef) g_Offsets.Refdef = baseAddr + offsets.Refdef;
+    if (offsets.BoneMatrix) g_Offsets.BoneMatrix = baseAddr + offsets.BoneMatrix;
+    if (offsets.WeaponInfo) g_Offsets.WeaponInfo = baseAddr + offsets.WeaponInfo;
     
     return true;
 }
@@ -978,40 +1215,25 @@ bool ProfessionalInit::Step_LoadConfig()
 
 bool ProfessionalInit::Step_CheckOffsetUpdates()
 {
-    Logger::LogSection("OFFSET UPDATER");
-    
     if (!g_Config.enableOffsetUpdater)
     {
+        Logger::LogSection("OFFSET UPDATER");
         Logger::LogTimestamp();
         Logger::LogWarning("Offset updater disabled in config");
+        g_InitStatus.passedChecks++;
         return true;
     }
     
-    Logger::LogTimestamp();
-    Logger::LogInfo("Checking for offset updates...");
+    // Use the new cloud sync with retry logic
+    bool success = OffsetUpdater::SyncWithCloud(3, 5000);  // 3 retries, 5 second delay
     
-    for (int i = 0; i < 10; i++) { Logger::LogSpinner("Fetching offsets", i); SimulateDelay(100); }
-    Logger::ClearLine();
-    
-    bool success = OffsetUpdater::FetchRemoteOffsets(g_Config.offsetURL);
-    
-    Logger::LogTimestamp();
     if (success)
     {
-        char msg[128];
-        snprintf(msg, sizeof(msg), "Offsets updated successfully for Game Build: %s", 
-                 OffsetUpdater::GetBuildNumber()[0] ? OffsetUpdater::GetBuildNumber() : "Unknown");
-        Logger::LogSuccess(msg);
-        
-        strcpy_s(g_InitStatus.gameBuild, OffsetUpdater::GetBuildNumber());
-        g_InitStatus.offsetsUpdated = true;
+        g_InitStatus.passedChecks++;
     }
-    else
-    {
-        Logger::LogWarning("Could not fetch remote offsets (using local)");
-    }
-    
+    // Even if sync fails, we continue (not critical)
     g_InitStatus.passedChecks++;
+    
     return true;
 }
 
@@ -1429,7 +1651,8 @@ void CreateDefaultConfig(const char* filename)
     g_Config.useLeechCore = true;
     g_Config.controllerType = ControllerType::NONE;
     g_Config.enableOffsetUpdater = true;
-    strcpy_s(g_Config.offsetURL, "https://raw.githubusercontent.com/offsets/cod/main/offsets.json");
+    // Use Zero Elite Cloud URL
+    strcpy_s(g_Config.offsetURL, OffsetUpdater::DEFAULT_OFFSET_URL);
     SaveConfig(filename);
 }
 

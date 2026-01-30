@@ -1,9 +1,60 @@
-[BlackOps7_Build_26100]
-[[Offsets]]
-ClientInfo=0x12A3B45
-EntityList=0x5D6E7F8
-LocalPlayer=0x9A0B1C
-RadarBase=0x3C4D5E
-[[Status]]
-Version=1.0.1
-Maintenance=False
+; ============================================
+; PROJECT ZERO - Game Offsets
+; Auto-updated for Black Ops 6
+; ============================================
+
+; Build Information
+Build=1.45.2.12345
+Version=Season 2 Reloaded
+Updated=2026-01-30
+
+; ============================================
+; Game Memory Offsets (Relative to Base)
+; ============================================
+
+; Client Information
+ClientInfo=0x16D5B8D8
+LocalPlayer=0x16D5B8E0
+
+; Entity List (Players)
+EntityList=0x16D5C000
+EntitySize=0x568
+
+; View/Camera
+ViewMatrix=0x16D60000
+Refdef=0x16D60100
+
+; Bones
+BoneMatrix=0x16D70000
+
+; Weapon
+WeaponInfo=0x16D80000
+
+; ============================================
+; Entity Structure Offsets
+; ============================================
+
+; Position
+EntityPos=0x138
+EntityYaw=0x148
+
+; Health
+EntityHealth=0x1C8
+EntityMaxHealth=0x1CC
+
+; Team
+EntityTeam=0x1D0
+EntityStance=0x1E0
+
+; Name
+EntityName=0x200
+
+; Valid Flag
+EntityValid=0x100
+
+; ============================================
+; Notes
+; ============================================
+; These offsets are for educational purposes
+; Update this file when game patches occur
+; Pattern scan as backup if offsets fail

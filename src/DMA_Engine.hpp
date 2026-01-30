@@ -135,22 +135,35 @@ struct RemoteOffsets {
 
 class OffsetUpdater {
 public:
+    // Main sync function - call this at startup
+    static bool UpdateOffsetsFromServer();
+    static bool SyncWithCloud(int maxRetries = 3, int retryDelayMs = 5000);
+    
     static bool FetchRemoteOffsets(const char* url);
     static bool ParseOffsetsJSON(const char* jsonData);
     static bool ParseOffsetsINI(const char* iniData);
+    static bool ParseOffsetsTXT(const char* txtData);
     static bool ApplyOffsets(const RemoteOffsets& offsets);
     static RemoteOffsets& GetLastOffsets() { return s_LastOffsets; }
     static bool IsUpdated() { return s_Updated; }
+    static bool IsSynced() { return s_Synced; }
     static const char* GetBuildNumber() { return s_LastOffsets.buildNumber; }
+    static const char* GetLastError() { return s_LastError; }
     
     // URL configuration
     static void SetOffsetURL(const char* url);
     static const char* GetOffsetURL() { return s_OffsetURL; }
     
+    // Default Zero Elite Cloud URL
+    static constexpr const char* DEFAULT_OFFSET_URL = 
+        "https://raw.githubusercontent.com/losttown1/cap/refs/heads/cursor/zero-elite-project-setup-11fd/offsets.txt.txt";
+    
 private:
     static RemoteOffsets s_LastOffsets;
     static bool s_Updated;
+    static bool s_Synced;
     static char s_OffsetURL[512];
+    static char s_LastError[256];
     
     // HTTP functions (using libcurl or WinHTTP)
     static bool HttpGet(const char* url, std::string& response);

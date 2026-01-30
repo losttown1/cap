@@ -2,8 +2,7 @@
 // Modern ImGui Menu with ESP, Aimbot, and DMA Settings
 
 #include "ZeroUI.hpp"
-#include "../include/imgui.h"
-#include "../include/imgui_internal.h"
+#include <imgui.h>
 #include <iostream>
 
 // إعدادات افتراضية لنظام Zero

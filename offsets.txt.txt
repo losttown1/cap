@@ -1,0 +1,9 @@
+[BlackOps7_Build_26100]
+[[Offsets]]
+ClientInfo=0x12A3B45
+EntityList=0x5D6E7F8
+LocalPlayer=0x9A0B1C
+RadarBase=0x3C4D5E
+[[Status]]
+Version=1.0.1
+Maintenance=False

@@ -977,17 +977,41 @@ void RenderMenu()
 // ============================================================================
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
 {
-    DMAEngine::Initialize();
+    // Run professional initialization checks
+    // This will display the console with all diagnostic info
+    // If DMA connection fails, this returns false and we exit
+    if (!DMAEngine::Initialize())
+    {
+        // Professional checks failed (DMA not connected)
+        // UI will NOT initialize for safety
+        // User already saw the error in the console
+        return 1;
+    }
+    
+    // Attempt pattern scanning
     PatternScanner::UpdateAllOffsets();
     
-    if (!CreateOverlayWindow()) return 1;
-    if (!InitGraphics()) return 1;
+    // Create the overlay window
+    if (!CreateOverlayWindow()) 
+    {
+        MessageBoxW(nullptr, L"Failed to create overlay window", L"Error", MB_OK | MB_ICONERROR);
+        return 1;
+    }
     
+    // Initialize graphics
+    if (!InitGraphics()) 
+    {
+        MessageBoxW(nullptr, L"Failed to initialize DirectX", L"Error", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    
+    // Start background threads
     std::thread inputThread(InputThread);
     std::thread updateThread(UpdateThread);
     
     g_LastFPSTime = GetTickCount();
     
+    // Main render loop
     while (g_Running)
     {
         MSG msg;
@@ -997,6 +1021,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
             DispatchMessageW(&msg);
         }
         
+        // FPS calculation
         g_FrameCount++;
         DWORD now = GetTickCount();
         if (now - g_LastFPSTime >= 1000)
@@ -1006,6 +1031,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
             g_LastFPSTime = now;
         }
         
+        // Clear and render
         float clearColor[4] = {0, 0, 0, 0};
         g_D3DContext->ClearRenderTargetView(g_RenderTarget, clearColor);
         
@@ -1021,9 +1047,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
         
         g_D2DTarget->EndDraw();
         
+        // Present with V-Sync OFF (0) for minimal input lag
         g_SwapChain->Present(0, 0);
     }
     
+    // Cleanup
     g_Running = false;
     inputThread.join();
     updateThread.join();

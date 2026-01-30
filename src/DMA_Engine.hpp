@@ -1,5 +1,5 @@
 // DMA_Engine.hpp - Professional DMA Engine
-// Features: Pre-Launch Diagnostics, Scatter Registry, Pattern Scanner, Config-driven Init
+// Features: Professional Logging, Pre-Launch Diagnostics, Scatter Registry
 
 #pragma once
 
@@ -15,6 +15,49 @@
 // DMA CONFIGURATION
 // ============================================================================
 #define DMA_ENABLED 1
+
+// ============================================================================
+// CONSOLE COLORS (Windows)
+// ============================================================================
+enum ConsoleColor {
+    COLOR_DEFAULT = 7,
+    COLOR_RED = 12,
+    COLOR_GREEN = 10,
+    COLOR_YELLOW = 14,
+    COLOR_CYAN = 11,
+    COLOR_WHITE = 15,
+    COLOR_GRAY = 8,
+    COLOR_MAGENTA = 13
+};
+
+// ============================================================================
+// INITIALIZATION STATUS
+// ============================================================================
+struct InitStatus {
+    bool loginSuccess = false;
+    bool configLoaded = false;
+    bool hardwareConnected = false;
+    bool arduinoConnected = false;
+    bool kmboxConnected = false;
+    bool dmaConnected = false;
+    bool mmapPresent = false;
+    bool gameFound = false;
+    bool keyboardReady = false;
+    bool mouseReady = false;
+    bool allChecksPassed = false;
+    
+    char windowsVersion[64] = {0};
+    char userName[64] = {0};
+    char configName[64] = {0};
+    char dmaDevice[64] = {0};
+    char gameProcess[64] = {0};
+    
+    int totalChecks = 0;
+    int passedChecks = 0;
+    int failedChecks = 0;
+};
+
+extern InitStatus g_InitStatus;
 
 // ============================================================================
 // DIAGNOSTIC RESULT CODES
@@ -46,20 +89,17 @@ struct DiagnosticStatus {
     DiagnosticResult lastError = DiagnosticResult::SUCCESS;
     char errorMessage[256] = {0};
     
-    // Device info
     char deviceName[64] = {0};
     char firmwareVersion[32] = {0};
     char deviceID[32] = {0};
     bool isGenericID = false;
     bool isLeakedID = false;
     
-    // Speed test results
     float readSpeedMBps = 0;
     float writeSpeedMBps = 0;
     int latencyUs = 0;
     bool speedSufficient = false;
     
-    // Overall status
     bool allChecksPassed = false;
 };
 
@@ -69,33 +109,26 @@ extern DiagnosticStatus g_DiagStatus;
 // CONFIG STRUCTURE
 // ============================================================================
 struct DMAConfig {
-    // Device settings
     char deviceType[32] = "fpga";
     char deviceArg[64] = "";
     char deviceAlgo[16] = "0";
     bool useCustomPCIe = false;
     char customPCIeID[32] = "";
     
-    // Target process
     char processName[64] = "cod.exe";
     wchar_t processNameW[64] = L"cod.exe";
     
-    // Performance
     int scatterBatchSize = 128;
     int updateRateHz = 120;
     bool useScatterRegistry = true;
     
-    // Diagnostics
     bool enableDiagnostics = true;
     bool autoCloseOnFail = true;
     float minSpeedMBps = 50.0f;
     int maxLatencyUs = 5000;
-    
-    // Known leaked/generic IDs to warn about
     bool warnGenericID = true;
     bool warnLeakedID = true;
     
-    // Map settings
     char mapImagePath[256] = "";
     float mapScaleX = 1.0f;
     float mapScaleY = 1.0f;
@@ -103,17 +136,79 @@ struct DMAConfig {
     float mapOffsetY = 0.0f;
     float mapRotation = 0.0f;
     
-    // Debug
     bool debugMode = false;
     bool logReads = false;
 };
 
 extern DMAConfig g_Config;
 
-// Config functions
 bool LoadConfig(const char* filename = "zero.ini");
 bool SaveConfig(const char* filename = "zero.ini");
 void CreateDefaultConfig(const char* filename = "zero.ini");
+
+// ============================================================================
+// PROFESSIONAL LOGGING SYSTEM
+// ============================================================================
+class Logger {
+public:
+    static void Initialize();
+    static void Shutdown();
+    
+    // Logging with colors and timestamps
+    static void Log(const char* message, ConsoleColor color = COLOR_DEFAULT);
+    static void LogSuccess(const char* message);
+    static void LogError(const char* message);
+    static void LogWarning(const char* message);
+    static void LogInfo(const char* message);
+    static void LogStatus(const char* label, const char* value, bool success);
+    static void LogProgress(const char* message, int current, int total);
+    
+    // Special formatted logs
+    static void LogBanner();
+    static void LogSection(const char* title);
+    static void LogSeparator();
+    static void LogTimestamp();
+    
+    // Animation
+    static void LogSpinner(const char* message, int frame);
+    static void ClearLine();
+    
+private:
+    static void SetColor(ConsoleColor color);
+    static void ResetColor();
+    static void* s_Console;
+};
+
+// ============================================================================
+// PROFESSIONAL INITIALIZATION SYSTEM
+// ============================================================================
+class ProfessionalInit {
+public:
+    // Main initialization function - returns true if all checks pass
+    static bool RunProfessionalChecks();
+    
+    // Individual check steps
+    static bool Step_LoginSequence();
+    static bool Step_LoadConfig();
+    static bool Step_HardwareHandshake();
+    static bool Step_ConnectDMA();
+    static bool Step_WaitForGame();
+    static bool Step_CheckSystemState();
+    
+    // Get initialization status
+    static InitStatus& GetStatus() { return g_InitStatus; }
+    static bool IsReady() { return g_InitStatus.allChecksPassed; }
+    
+private:
+    static void SimulateDelay(int ms);
+    static bool CheckArduinoConnection();
+    static bool CheckKMBoxConnection();
+    static bool CheckDMAConnection();
+    static bool CheckMemoryMap();
+    static void GetWindowsVersion(char* buffer, size_t size);
+    static void GetKeyboardState(char* buffer, size_t size);
+    static void GetMouseState(char* buffer, size_t size);
+};
 
 // ============================================================================
 // PATTERN SIGNATURES
@@ -130,9 +225,6 @@ namespace Patterns {
     
     constexpr const char* ViewMatrix = "\x48\x8B\x15\x00\x00\x00\x00\x48\x8D\x4C\x24\x00\xE8";
     constexpr const char* ViewMatrixMask = "xxx????xxxx?x";
-    
-    constexpr const char* Refdef = "\x48\x8D\x0D\x00\x00\x00\x00\xE8\x00\x00\x00\x00\x84\xC0\x0F\x84";
-    constexpr const char* RefdefMask = "xxx????x????xxxx";
 }
 
 // ============================================================================
@@ -154,9 +246,6 @@ struct GameOffsets {
     static constexpr uintptr_t EntityName = 0x200;
     static constexpr uintptr_t EntityValid = 0x100;
     static constexpr uintptr_t EntityStance = 0x1E0;
-    
-    static constexpr uintptr_t BoneBase = 0x27F20;
-    static constexpr uintptr_t BoneIndex = 0x150;
 };
 
 extern GameOffsets g_Offsets;
@@ -183,12 +272,9 @@ struct Vec3 {
     Vec3 operator*(float s) const { return {x * s, y * s, z * s}; }
     float Length() const { return sqrtf(x*x + y*y + z*z); }
     float Length2D() const { return sqrtf(x*x + y*y); }
-    Vec3 Normalize() const { float l = Length(); return l > 0 ? Vec3(x/l, y/l, z/l) : Vec3(); }
 };
 
-struct Matrix4x4 {
-    float m[4][4] = {};
-};
+struct Matrix4x4 { float m[4][4] = {}; };
 
 // ============================================================================
 // PLAYER DATA
@@ -224,17 +310,9 @@ struct PlayerData {
 // SCATTER READ REGISTRY
 // ============================================================================
 enum class ScatterDataType {
-    PLAYER_POSITION,
-    PLAYER_HEALTH,
-    PLAYER_NAME,
-    PLAYER_TEAM,
-    PLAYER_YAW,
-    PLAYER_VALID,
-    PLAYER_STANCE,
-    LOCAL_POSITION,
-    LOCAL_YAW,
-    VIEW_MATRIX,
-    CUSTOM
+    PLAYER_POSITION, PLAYER_HEALTH, PLAYER_NAME, PLAYER_TEAM,
+    PLAYER_YAW, PLAYER_VALID, PLAYER_STANCE, LOCAL_POSITION,
+    LOCAL_YAW, VIEW_MATRIX, CUSTOM
 };
 
 struct ScatterEntry {
@@ -264,16 +342,12 @@ private:
     
     struct PlayerRawData {
         Vec3 position;
-        int health;
-        int maxHealth;
-        int team;
+        int health, maxHealth, team;
         float yaw;
-        uint8_t valid;
-        uint8_t stance;
+        uint8_t valid, stance;
         char name[64];
     };
     std::vector<PlayerRawData> m_PlayerBuffers;
-    
     Vec3 m_LocalPosition;
     float m_LocalYaw;
     int m_LocalTeam;
@@ -286,20 +360,12 @@ extern ScatterReadRegistry g_ScatterRegistry;
 // MAP TEXTURE SUPPORT
 // ============================================================================
 struct MapInfo {
-    float minX = -5000.0f;
-    float maxX = 5000.0f;
-    float minY = -5000.0f;
-    float maxY = 5000.0f;
-    
-    int imageWidth = 0;
-    int imageHeight = 0;
-    
-    float scaleX = 1.0f;
-    float scaleY = 1.0f;
-    float offsetX = 0.0f;
-    float offsetY = 0.0f;
+    float minX = -5000.0f, maxX = 5000.0f;
+    float minY = -5000.0f, maxY = 5000.0f;
+    int imageWidth = 0, imageHeight = 0;
+    float scaleX = 1.0f, scaleY = 1.0f;
+    float offsetX = 0.0f, offsetY = 0.0f;
     float rotation = 0.0f;
-    
     char name[64] = "";
     char imagePath[256] = "";
     bool hasTexture = false;
@@ -323,35 +389,23 @@ private:
 };
 
 // ============================================================================
-// PRE-LAUNCH DIAGNOSTIC SYSTEM
+// DIAGNOSTIC SYSTEM
 // ============================================================================
 class DiagnosticSystem {
 public:
-    // Run all diagnostics before UI launch
     static bool RunAllDiagnostics();
-    
-    // Individual checks
     static DiagnosticResult CheckDeviceHandshake();
     static DiagnosticResult CheckFirmwareIntegrity();
     static DiagnosticResult CheckMemorySpeed();
     static DiagnosticResult CheckProcessAccess();
-    
-    // Get results
     static DiagnosticStatus& GetStatus() { return g_DiagStatus; }
     static const char* GetErrorString(DiagnosticResult result);
-    
-    // Self-destruct on failure
     static void SelfDestruct(const char* reason);
-    
-    // Show error popup
     static void ShowErrorPopup(const char* title, const char* message);
     
 private:
-    // Known generic/leaked FPGA IDs
     static bool IsGenericDeviceID(const char* deviceID);
     static bool IsLeakedDeviceID(const char* deviceID);
-    
-    // Speed test helpers
     static float MeasureReadSpeed(uintptr_t testAddr, size_t size, int iterations);
     static int MeasureLatency(uintptr_t testAddr, int iterations);
 };
@@ -361,33 +415,28 @@ private:
 // ============================================================================
 class DMAEngine {
 public:
-    // Initialization with diagnostics
     static bool Initialize();
     static bool InitializeWithConfig(const DMAConfig& config);
     static void Shutdown();
     static bool IsConnected();
-    static bool IsOnline();  // True only if all diagnostics passed
+    static bool IsOnline();
     static const char* GetStatus();
     static const char* GetDeviceInfo();
     
-    // Memory operations
     template<typename T>
     static T Read(uintptr_t address);
     
     static bool ReadBuffer(uintptr_t address, void* buffer, size_t size);
     static bool ReadString(uintptr_t address, char* buffer, size_t maxLen);
-    
-    // Scatter operations
     static void ExecuteScatter(std::vector<ScatterEntry>& entries);
     
-    // Process info
     static uintptr_t GetBaseAddress();
     static uintptr_t GetModuleBase(const wchar_t* moduleName);
     static size_t GetModuleSize();
     
 private:
     static bool s_Connected;
-    static bool s_Online;  // All diagnostics passed
+    static bool s_Online;
     static bool s_SimulationMode;
     static uintptr_t s_BaseAddress;
     static size_t s_ModuleSize;
@@ -420,18 +469,15 @@ public:
     static void Initialize();
     static void Update();
     static void UpdateWithScatterRegistry();
-    
     static std::vector<PlayerData>& GetPlayers();
     static PlayerData& GetLocalPlayer();
     static int GetAliveCount();
     static int GetEnemyCount();
-    
     static std::mutex& GetMutex() { return s_Mutex; }
     
 private:
     static void SimulateUpdate();
     static void RealUpdate();
-    
     static std::vector<PlayerData> s_Players;
     static PlayerData s_LocalPlayer;
     static std::mutex s_Mutex;
@@ -445,7 +491,6 @@ private:
 bool WorldToScreen(const Vec3& worldPos, Vec2& screenPos, int screenW, int screenH);
 bool WorldToRadar(const Vec3& worldPos, const Vec3& localPos, float localYaw, 
                   Vec2& radarPos, float radarCX, float radarCY, float radarScale);
-
 float GetFOVTo(const Vec2& screenCenter, const Vec2& targetScreen);
 Vec3 CalcAngle(const Vec3& src, const Vec3& dst);
 void SmoothAngle(Vec3& currentAngle, const Vec3& targetAngle, float smoothness);

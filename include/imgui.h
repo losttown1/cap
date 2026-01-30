@@ -114,6 +114,16 @@ typedef unsigned int ImU32;
 typedef signed long long ImS64;
 typedef unsigned long long ImU64;
 
+// Color helpers (must be after ImU32 typedef)
+#define IM_COL32_R_SHIFT    0
+#define IM_COL32_G_SHIFT    8
+#define IM_COL32_B_SHIFT    16
+#define IM_COL32_A_SHIFT    24
+#define IM_COL32(R,G,B,A)   (((ImU32)(A)<<IM_COL32_A_SHIFT) | ((ImU32)(B)<<IM_COL32_B_SHIFT) | ((ImU32)(G)<<IM_COL32_G_SHIFT) | ((ImU32)(R)<<IM_COL32_R_SHIFT))
+#define IM_COL32_WHITE      IM_COL32(255,255,255,255)
+#define IM_COL32_BLACK      IM_COL32(0,0,0,255)
+#define IM_COL32_BLACK_TRANS IM_COL32(0,0,0,0)
+
 // Callback types
 typedef int (*ImGuiInputTextCallback)(ImGuiInputTextCallbackData* data);
 typedef void (*ImGuiSizeCallback)(ImGuiSizeCallbackData* data);

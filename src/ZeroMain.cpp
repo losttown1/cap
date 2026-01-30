@@ -171,12 +171,12 @@ void UpdateThread()
 // ============================================================================
 inline void SetColor(const D2D1_COLOR_F& c) { if (g_Brush) g_Brush->SetColor(c); }
 
-void RenderString(const wchar_t* txt, float x, float y, const D2D1_COLOR_F& col, bool small)
+void RenderString(const wchar_t* txt, float x, float y, const D2D1_COLOR_F& col, bool isSmall)
 {
     if (!g_D2DTarget || !g_Brush) return;
     SetColor(col);
     D2D1_RECT_F r = {x, y, x + 400, y + 30};
-    g_D2DTarget->DrawTextW(txt, (UINT32)wcslen(txt), small ? g_SmallTextFormat : g_TextFormat, r, g_Brush);
+    g_D2DTarget->DrawTextW(txt, (UINT32)wcslen(txt), isSmall ? g_SmallTextFormat : g_TextFormat, r, g_Brush);
 }
 
 void FillRect_(float x, float y, float w, float h, const D2D1_COLOR_F& c)

@@ -1,5 +1,5 @@
-// ZeroMain.cpp - Professional DMA Overlay v4.0
-// Black Transparent Overlay - All drawing here ONLY
+// ZeroMain.cpp - STRICT Black Overlay v4.1
+// Solid Black Window + Color Keying (Professional Method)
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -20,6 +20,10 @@
 #pragma comment(lib, "dwmapi.lib")
 
 #include "DMA_Engine.hpp"
+
+// External functions from DMA_Engine.cpp
+extern const char* GetKMBoxStatus();
+extern bool IsKMBoxConnected();
 
 // ============================================================================
 // SETTINGS
@@ -46,11 +50,11 @@ struct AppSettings {
 static AppSettings g_Settings;
 
 // ============================================================================
-// GLOBALS - THE BLACK TRANSPARENT OVERLAY
+// GLOBALS - THE BLACK WINDOW
 // ============================================================================
-static HWND g_OverlayHwnd = nullptr;
-static ID3D11Device* g_D3DDevice = nullptr;
-static ID3D11DeviceContext* g_D3DContext = nullptr;
+static HWND g_BlackWindow = nullptr;
+static ID3D11Device* g_Device = nullptr;
+static ID3D11DeviceContext* g_Context = nullptr;
 static IDXGISwapChain* g_SwapChain = nullptr;
 static ID3D11RenderTargetView* g_RenderTarget = nullptr;
 static ID2D1Factory* g_D2DFactory = nullptr;
@@ -58,20 +62,22 @@ static ID2D1RenderTarget* g_D2DTarget = nullptr;
 static ID2D1SolidColorBrush* g_Brush = nullptr;
 static IDWriteFactory* g_DWriteFactory = nullptr;
 static IDWriteTextFormat* g_TextFormat = nullptr;
-static IDWriteTextFormat* g_TextFormatSmall = nullptr;
+static IDWriteTextFormat* g_SmallTextFormat = nullptr;
 
-static int g_ScreenWidth = 0;
-static int g_ScreenHeight = 0;
+// RESOLUTION SYNC - Detect monitor resolution
+static int g_MonitorWidth = 0;
+static int g_MonitorHeight = 0;
+
 static bool g_MenuVisible = false;
 static bool g_Running = true;
 static std::atomic<bool> g_GameRunning(false);
 static int g_CurrentTab = 0;
 
 // ============================================================================
-// COLORS
+// COLORS - Black is the key color (will be transparent)
 // ============================================================================
 namespace Colors {
-    const D2D1_COLOR_F Clear = {0, 0, 0, 0};
+    const D2D1_COLOR_F Black = {0, 0, 0, 1.0f};       // This becomes transparent
     const D2D1_COLOR_F Red = {1.0f, 0.2f, 0.2f, 1.0f};
     const D2D1_COLOR_F Green = {0.2f, 1.0f, 0.2f, 1.0f};
     const D2D1_COLOR_F Yellow = {1.0f, 1.0f, 0.2f, 1.0f};
@@ -79,7 +85,7 @@ namespace Colors {
     const D2D1_COLOR_F Gray = {0.5f, 0.5f, 0.5f, 1.0f};
     const D2D1_COLOR_F DarkGray = {0.15f, 0.15f, 0.15f, 0.95f};
     const D2D1_COLOR_F Accent = {0.8f, 0.1f, 0.1f, 1.0f};
-    const D2D1_COLOR_F Background = {0.08f, 0.08f, 0.08f, 0.95f};
+    const D2D1_COLOR_F MenuBG = {0.08f, 0.08f, 0.08f, 0.95f};
     const D2D1_COLOR_F Blue = {0.2f, 0.4f, 1.0f, 1.0f};
 }
 
@@ -90,9 +96,9 @@ static POINT g_MousePos = {0, 0};
 static bool g_MouseDown = false;
 
 // ============================================================================
-// WINDOW PROCEDURE
+// WINDOW PROCEDURE FOR BLACK WINDOW
 // ============================================================================
-LRESULT CALLBACK OverlayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK BlackWindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
     {
@@ -127,14 +133,14 @@ void InputThread()
         if (insertPressed && !insertWasPressed)
         {
             g_MenuVisible = !g_MenuVisible;
-            if (g_OverlayHwnd)
+            if (g_BlackWindow)
             {
-                LONG_PTR style = GetWindowLongPtrW(g_OverlayHwnd, GWL_EXSTYLE);
+                LONG_PTR style = GetWindowLongPtrW(g_BlackWindow, GWL_EXSTYLE);
                 if (g_MenuVisible)
                     style &= ~WS_EX_TRANSPARENT;
                 else
                     style |= WS_EX_TRANSPARENT;
-                SetWindowLongPtrW(g_OverlayHwnd, GWL_EXSTYLE, style);
+                SetWindowLongPtrW(g_BlackWindow, GWL_EXSTYLE, style);
             }
         }
         insertWasPressed = insertPressed;
@@ -161,61 +167,57 @@ void UpdateThread()
 }
 
 // ============================================================================
-// DRAWING HELPERS - ALL DRAWING ON OVERLAY ONLY
+// DRAWING HELPERS - ALL DRAWING ON BLACK WINDOW
 // ============================================================================
-inline void SetBrushColor(const D2D1_COLOR_F& c) 
-{ 
-    if (g_Brush) g_Brush->SetColor(c); 
-}
+inline void SetColor(const D2D1_COLOR_F& c) { if (g_Brush) g_Brush->SetColor(c); }
 
-void DrawTextOnOverlay(const wchar_t* txt, float x, float y, const D2D1_COLOR_F& col, bool useSmall)
+void DrawText_(const wchar_t* txt, float x, float y, const D2D1_COLOR_F& col, bool small)
 {
     if (!g_D2DTarget || !g_Brush) return;
-    SetBrushColor(col);
+    SetColor(col);
     D2D1_RECT_F r = {x, y, x + 400, y + 30};
-    IDWriteTextFormat* fmt = useSmall ? g_TextFormatSmall : g_TextFormat;
-    g_D2DTarget->DrawTextW(txt, (UINT32)wcslen(txt), fmt, r, g_Brush);
+    g_D2DTarget->DrawTextW(txt, (UINT32)wcslen(txt), small ? g_SmallTextFormat : g_TextFormat, r, g_Brush);
 }
 
-void FillRect(float x, float y, float w, float h, const D2D1_COLOR_F& c)
+void FillRect_(float x, float y, float w, float h, const D2D1_COLOR_F& c)
 {
     if (!g_D2DTarget || !g_Brush) return;
-    SetBrushColor(c);
+    SetColor(c);
     g_D2DTarget->FillRectangle(D2D1::RectF(x, y, x + w, y + h), g_Brush);
 }
 
-void DrawRect(float x, float y, float w, float h, const D2D1_COLOR_F& c, float stroke)
+void DrawRect_(float x, float y, float w, float h, const D2D1_COLOR_F& c, float stroke)
 {
     if (!g_D2DTarget || !g_Brush) return;
-    SetBrushColor(c);
+    SetColor(c);
     g_D2DTarget->DrawRectangle(D2D1::RectF(x, y, x + w, y + h), g_Brush, stroke);
 }
 
-void DrawLine(float x1, float y1, float x2, float y2, const D2D1_COLOR_F& c, float stroke)
+void DrawLine_(float x1, float y1, float x2, float y2, const D2D1_COLOR_F& c, float stroke)
 {
     if (!g_D2DTarget || !g_Brush) return;
-    SetBrushColor(c);
+    SetColor(c);
     g_D2DTarget->DrawLine(D2D1::Point2F(x1, y1), D2D1::Point2F(x2, y2), g_Brush, stroke);
 }
 
-void DrawCircle(float cx, float cy, float r, const D2D1_COLOR_F& c, float stroke)
+void DrawCircle_(float cx, float cy, float r, const D2D1_COLOR_F& c, float stroke)
 {
     if (!g_D2DTarget || !g_Brush) return;
-    SetBrushColor(c);
+    SetColor(c);
     g_D2DTarget->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), r, r), g_Brush, stroke);
 }
 
-void FillCircle(float cx, float cy, float r, const D2D1_COLOR_F& c)
+void FillCircle_(float cx, float cy, float r, const D2D1_COLOR_F& c)
 {
     if (!g_D2DTarget || !g_Brush) return;
-    SetBrushColor(c);
+    SetColor(c);
     g_D2DTarget->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), r, r), g_Brush);
 }
 
-void DrawRoundedRect(float x, float y, float w, float h, float r, const D2D1_COLOR_F& c)
+void DrawRoundedRect_(float x, float y, float w, float h, float r, const D2D1_COLOR_F& c)
 {
     if (!g_D2DTarget || !g_Brush) return;
-    SetBrushColor(c);
+    SetColor(c);
     D2D1_ROUNDED_RECT rr = {D2D1::RectF(x, y, x + w, y + h), r, r};
     g_D2DTarget->FillRoundedRectangle(rr, g_Brush);
 }
@@ -232,10 +234,10 @@ bool Toggle(const wchar_t* label, float x, float y, bool* value)
 {
     float w = 40, h = 20;
     D2D1_COLOR_F bg = *value ? Colors::Accent : D2D1_COLOR_F{0.3f, 0.3f, 0.3f, 1.0f};
-    DrawRoundedRect(x, y, w, h, h/2, bg);
+    DrawRoundedRect_(x, y, w, h, h/2, bg);
     float knobX = *value ? x + w - h + 2 : x + 2;
-    FillCircle(knobX + (h-4)/2, y + h/2, (h-4)/2, Colors::White);
-    DrawTextOnOverlay(label, x + w + 10, y, Colors::White, true);
+    FillCircle_(knobX + (h-4)/2, y + h/2, (h-4)/2, Colors::White);
+    DrawText_(label, x + w + 10, y, Colors::White, true);
     
     if (g_MouseDown && InRect((float)g_MousePos.x, (float)g_MousePos.y, x, y, w + 150, h))
     {
@@ -246,41 +248,41 @@ bool Toggle(const wchar_t* label, float x, float y, bool* value)
     return false;
 }
 
-bool Slider(const wchar_t* label, float x, float y, float* value, float minVal, float maxVal)
+bool Slider(const wchar_t* label, float x, float y, float* value, float minV, float maxV)
 {
     float w = 150, h = 6;
-    DrawTextOnOverlay(label, x, y - 18, Colors::White, true);
+    DrawText_(label, x, y - 18, Colors::White, true);
     
-    FillRect(x, y + 7, w, h, Colors::Gray);
-    float pct = (*value - minVal) / (maxVal - minVal);
-    FillRect(x, y + 7, w * pct, h, Colors::Accent);
-    FillCircle(x + w * pct, y + 10, 8, Colors::White);
+    FillRect_(x, y + 7, w, h, Colors::Gray);
+    float pct = (*value - minV) / (maxV - minV);
+    FillRect_(x, y + 7, w * pct, h, Colors::Accent);
+    FillCircle_(x + w * pct, y + 10, 8, Colors::White);
     
     wchar_t valStr[16];
     swprintf_s(valStr, L"%.1f", *value);
-    DrawTextOnOverlay(valStr, x + w + 10, y - 2, Colors::Gray, true);
+    DrawText_(valStr, x + w + 10, y - 2, Colors::Gray, true);
     
     if (g_MouseDown && InRect((float)g_MousePos.x, (float)g_MousePos.y, x - 5, y, w + 10, 20))
     {
         float newPct = ((float)g_MousePos.x - x) / w;
         if (newPct < 0) newPct = 0;
         if (newPct > 1) newPct = 1;
-        *value = minVal + newPct * (maxVal - minVal);
+        *value = minV + newPct * (maxV - minV);
         return true;
     }
     return false;
 }
 
 // ============================================================================
-// RENDER ESP - NO GHOST DRAWINGS
+// RENDER ESP
 // ============================================================================
 void RenderESP()
 {
     if (!g_Settings.espEnabled || !g_GameRunning) return;
     
     auto& players = PlayerManager::GetPlayers();
-    float centerX = (float)g_ScreenWidth / 2;
-    float centerY = (float)g_ScreenHeight / 2;
+    float centerX = (float)g_MonitorWidth / 2;
+    float centerY = (float)g_MonitorHeight / 2;
     
     for (auto& p : players)
     {
@@ -292,7 +294,7 @@ void RenderESP()
         float screenX = centerX + cosf(angle) * (dist * 3.0f);
         float screenY = centerY + sinf(angle) * (dist * 3.0f);
         
-        if (screenX < 0 || screenX > g_ScreenWidth || screenY < 0 || screenY > g_ScreenHeight)
+        if (screenX < 0 || screenX > g_MonitorWidth || screenY < 0 || screenY > g_MonitorHeight)
             continue;
         
         float boxH = 80.0f - dist * 0.3f;
@@ -302,28 +304,28 @@ void RenderESP()
         D2D1_COLOR_F color = p.isEnemy ? Colors::Red : Colors::Green;
         
         if (g_Settings.espBoxes)
-            DrawRect(screenX - boxW/2, screenY - boxH, boxW, boxH, color, 2.0f);
+            DrawRect_(screenX - boxW/2, screenY - boxH, boxW, boxH, color, 2.0f);
         
         if (g_Settings.espHealth)
         {
             float healthPct = (float)p.health / (float)p.maxHealth;
             float barH = boxH * healthPct;
             D2D1_COLOR_F hpColor = {1.0f - healthPct, healthPct, 0, 1.0f};
-            FillRect(screenX - boxW/2 - 6, screenY - barH, 4, barH, hpColor);
+            FillRect_(screenX - boxW/2 - 6, screenY - barH, 4, barH, hpColor);
         }
         
         if (g_Settings.espNames)
         {
             wchar_t nameW[32];
             mbstowcs_s(nullptr, nameW, p.name, 31);
-            DrawTextOnOverlay(nameW, screenX - 30, screenY - boxH - 18, Colors::White, true);
+            DrawText_(nameW, screenX - 30, screenY - boxH - 18, Colors::White, true);
         }
         
         if (g_Settings.espDistance)
         {
             wchar_t distStr[16];
             swprintf_s(distStr, L"%.0fm", p.distance);
-            DrawTextOnOverlay(distStr, screenX - 15, screenY + 5, Colors::Yellow, true);
+            DrawText_(distStr, screenX - 15, screenY + 5, Colors::Yellow, true);
         }
     }
 }
@@ -335,15 +337,15 @@ void RenderCrosshair()
 {
     if (!g_Settings.crosshair) return;
     
-    float cx = (float)g_ScreenWidth / 2;
-    float cy = (float)g_ScreenHeight / 2;
+    float cx = (float)g_MonitorWidth / 2;
+    float cy = (float)g_MonitorHeight / 2;
     
-    DrawLine(cx - 8, cy, cx + 8, cy, Colors::White, 2.0f);
-    DrawLine(cx, cy - 8, cx, cy + 8, Colors::White, 2.0f);
+    DrawLine_(cx - 8, cy, cx + 8, cy, Colors::White, 2.0f);
+    DrawLine_(cx, cy - 8, cx, cy + 8, Colors::White, 2.0f);
 }
 
 // ============================================================================
-// RENDER RADAR - NO GHOST DRAWINGS
+// RENDER RADAR
 // ============================================================================
 void RenderRadar()
 {
@@ -353,13 +355,13 @@ void RenderRadar()
     float cx = 20 + size/2;
     float cy = 20 + size/2;
     
-    FillCircle(cx, cy, size/2, D2D1_COLOR_F{0.1f, 0.1f, 0.1f, 0.85f});
-    DrawCircle(cx, cy, size/2, Colors::Accent, 2.0f);
+    FillCircle_(cx, cy, size/2, D2D1_COLOR_F{0.1f, 0.1f, 0.1f, 0.85f});
+    DrawCircle_(cx, cy, size/2, Colors::Accent, 2.0f);
     
-    DrawLine(cx - size/2, cy, cx + size/2, cy, D2D1_COLOR_F{0.3f, 0.3f, 0.3f, 0.5f}, 1.0f);
-    DrawLine(cx, cy - size/2, cx, cy + size/2, D2D1_COLOR_F{0.3f, 0.3f, 0.3f, 0.5f}, 1.0f);
+    DrawLine_(cx - size/2, cy, cx + size/2, cy, D2D1_COLOR_F{0.3f, 0.3f, 0.3f, 0.5f}, 1.0f);
+    DrawLine_(cx, cy - size/2, cx, cy + size/2, D2D1_COLOR_F{0.3f, 0.3f, 0.3f, 0.5f}, 1.0f);
     
-    FillCircle(cx, cy, 4, Colors::Blue);
+    FillCircle_(cx, cy, 4, Colors::Blue);
     
     auto& players = PlayerManager::GetPlayers();
     auto& local = PlayerManager::GetLocalPlayer();
@@ -383,42 +385,42 @@ void RenderRadar()
         }
         
         D2D1_COLOR_F dotColor = p.isEnemy ? Colors::Red : Colors::Green;
-        FillCircle(radarPos.x, radarPos.y, 4, dotColor);
+        FillCircle_(radarPos.x, radarPos.y, 4, dotColor);
     }
     
-    DrawTextOnOverlay(L"RADAR", cx - 20, cy + size/2 + 5, Colors::White, true);
+    DrawText_(L"RADAR", cx - 20, cy + size/2 + 5, Colors::White, true);
 }
 
 // ============================================================================
-// RENDER MENU
+// RENDER MENU - Shows REAL hardware status
 // ============================================================================
 void RenderMenu()
 {
     if (!g_MenuVisible) return;
     
-    float menuX = (float)g_ScreenWidth / 2 - 200;
-    float menuY = (float)g_ScreenHeight / 2 - 200;
+    float menuX = (float)g_MonitorWidth / 2 - 200;
+    float menuY = (float)g_MonitorHeight / 2 - 200;
     float menuW = 400;
     float menuH = 400;
     
-    DrawRoundedRect(menuX, menuY, menuW, menuH, 10, Colors::Background);
-    FillRect(menuX, menuY, menuW, 40, Colors::Accent);
-    DrawTextOnOverlay(L"PROJECT ZERO | v4.0", menuX + 10, menuY + 8, Colors::White, false);
+    DrawRoundedRect_(menuX, menuY, menuW, menuH, 10, Colors::MenuBG);
+    FillRect_(menuX, menuY, menuW, 40, Colors::Accent);
+    DrawText_(L"PROJECT ZERO | v4.1", menuX + 10, menuY + 8, Colors::White, false);
     
-    // Status indicator
-    bool isOnline = DMAEngine::IsOnline();
-    D2D1_COLOR_F statusColor = isOnline ? Colors::Green : Colors::Yellow;
-    FillCircle(menuX + menuW - 25, menuY + 20, 8, statusColor);
+    // Status indicator - REAL STATUS
+    bool dmaOnline = DMAEngine::IsConnected();
+    D2D1_COLOR_F statusColor = dmaOnline ? Colors::Green : Colors::Red;
+    FillCircle_(menuX + menuW - 25, menuY + 20, 8, statusColor);
     
     // Tabs
     float tabY = menuY + 50;
-    const wchar_t* tabs[] = {L"ESP", L"RADAR", L"AIMBOT", L"INFO"};
+    const wchar_t* tabs[] = {L"ESP", L"RADAR", L"AIMBOT", L"STATUS"};
     for (int i = 0; i < 4; i++)
     {
         float tabX = menuX + 10 + i * 95;
         D2D1_COLOR_F tabColor = (i == g_CurrentTab) ? Colors::Accent : Colors::DarkGray;
-        DrawRoundedRect(tabX, tabY, 90, 30, 5, tabColor);
-        DrawTextOnOverlay(tabs[i], tabX + 25, tabY + 5, Colors::White, true);
+        DrawRoundedRect_(tabX, tabY, 90, 30, 5, tabColor);
+        DrawText_(tabs[i], tabX + 20, tabY + 5, Colors::White, true);
         
         if (g_MouseDown && InRect((float)g_MousePos.x, (float)g_MousePos.y, tabX, tabY, 90, 30))
         {
@@ -452,38 +454,49 @@ void RenderMenu()
         Slider(L"FOV", contentX, contentY + 90, &g_Settings.aimbotFOV, 5, 100);
         Slider(L"Smooth", contentX, contentY + 145, &g_Settings.aimbotSmooth, 1, 20);
         
+        // REAL KMBox Status
         {
+            bool kmConnected = IsKMBoxConnected();
             wchar_t kmStatus[64];
-            bool kmConnected = HardwareController::IsConnected();
-            swprintf_s(kmStatus, L"KMBox: %s", kmConnected ? L"AUTO-LOCKED" : L"Software");
-            DrawTextOnOverlay(kmStatus, contentX, contentY + 200, kmConnected ? Colors::Green : Colors::Yellow, true);
+            swprintf_s(kmStatus, L"KMBox: %S", GetKMBoxStatus());
+            DrawText_(kmStatus, contentX, contentY + 200, kmConnected ? Colors::Green : Colors::Red, true);
             
             if (kmConnected)
             {
                 wchar_t portInfo[32];
                 swprintf_s(portInfo, L"Port: %S", HardwareController::GetLockedPort());
-                DrawTextOnOverlay(portInfo, contentX, contentY + 225, Colors::Gray, true);
+                DrawText_(portInfo, contentX, contentY + 225, Colors::Gray, true);
             }
         }
         break;
         
-    case 3: // INFO
+    case 3: // STATUS - REAL HARDWARE STATUS
         {
+            // DMA Status - REAL
+            bool dmaOK = DMAEngine::IsConnected();
             wchar_t dmaStatus[64];
             swprintf_s(dmaStatus, L"DMA: %S", DMAEngine::GetStatus());
-            DrawTextOnOverlay(dmaStatus, contentX, contentY, Colors::White, true);
+            DrawText_(dmaStatus, contentX, contentY, dmaOK ? Colors::Green : Colors::Red, true);
             
-            wchar_t deviceInfo[64];
-            swprintf_s(deviceInfo, L"Device: %S", DMAEngine::GetDeviceInfo());
-            DrawTextOnOverlay(deviceInfo, contentX, contentY + 25, Colors::Gray, true);
+            // KMBox Status - REAL
+            bool kmOK = IsKMBoxConnected();
+            wchar_t kmStatus[64];
+            swprintf_s(kmStatus, L"KMBox: %S", GetKMBoxStatus());
+            DrawText_(kmStatus, contentX, contentY + 30, kmOK ? Colors::Green : Colors::Red, true);
             
-            wchar_t cloudStatus[64];
-            swprintf_s(cloudStatus, L"Offsets: %s", OffsetUpdater::s_Synced ? L"CLOUD" : L"LOCAL");
-            DrawTextOnOverlay(cloudStatus, contentX, contentY + 50, OffsetUpdater::s_Synced ? Colors::Green : Colors::Yellow, true);
+            // Resolution
+            wchar_t resInfo[64];
+            swprintf_s(resInfo, L"Resolution: %dx%d", g_MonitorWidth, g_MonitorHeight);
+            DrawText_(resInfo, contentX, contentY + 60, Colors::White, true);
             
-            DrawTextOnOverlay(L"---", contentX, contentY + 85, Colors::Gray, true);
-            DrawTextOnOverlay(L"INSERT - Toggle Menu", contentX, contentY + 110, Colors::Gray, true);
-            DrawTextOnOverlay(L"END - Exit", contentX, contentY + 135, Colors::Gray, true);
+            // Offsets
+            wchar_t offsetStatus[64];
+            swprintf_s(offsetStatus, L"Offsets: %s", OffsetUpdater::s_Synced ? L"CLOUD" : L"LOCAL");
+            DrawText_(offsetStatus, contentX, contentY + 90, OffsetUpdater::s_Synced ? Colors::Green : Colors::Yellow, true);
+            
+            DrawText_(L"---", contentX, contentY + 130, Colors::Gray, true);
+            DrawText_(L"INSERT - Toggle Menu", contentX, contentY + 155, Colors::Gray, true);
+            DrawText_(L"END - Exit", contentX, contentY + 180, Colors::Gray, true);
         }
         break;
     }
@@ -496,50 +509,52 @@ void RenderAimbotFOV()
 {
     if (!g_Settings.aimbotEnabled || !g_Settings.aimbotFOVCircle) return;
     
-    float cx = (float)g_ScreenWidth / 2;
-    float cy = (float)g_ScreenHeight / 2;
-    DrawCircle(cx, cy, g_Settings.aimbotFOV * 5, D2D1_COLOR_F{1.0f, 1.0f, 1.0f, 0.3f}, 1.0f);
+    float cx = (float)g_MonitorWidth / 2;
+    float cy = (float)g_MonitorHeight / 2;
+    DrawCircle_(cx, cy, g_Settings.aimbotFOV * 5, D2D1_COLOR_F{1.0f, 1.0f, 1.0f, 0.3f}, 1.0f);
 }
 
 // ============================================================================
-// CREATE THE BLACK TRANSPARENT OVERLAY
+// CREATE THE BLACK WINDOW (Professional Method)
 // ============================================================================
-bool CreateTransparentOverlay()
+bool CreateBlackWindow()
 {
-    // STEP 1: Detect monitor resolution
-    g_ScreenWidth = GetSystemMetrics(SM_CXSCREEN);
-    g_ScreenHeight = GetSystemMetrics(SM_CYSCREEN);
+    // STEP 1: DETECT MONITOR RESOLUTION
+    g_MonitorWidth = GetSystemMetrics(SM_CXSCREEN);
+    g_MonitorHeight = GetSystemMetrics(SM_CYSCREEN);
     
-    // STEP 2: Register window class
+    // STEP 2: Register window class with BLACK background
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
     wc.style = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc = OverlayWndProc;
+    wc.lpfnWndProc = BlackWindowProc;
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.lpszClassName = L"ZeroEliteOverlay";
+    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);  // SOLID BLACK BACKGROUND
+    wc.lpszClassName = L"ZeroEliteBlackWindow";
     RegisterClassExW(&wc);
     
-    // STEP 3: Create FULL-SCREEN TOP-MOST TRANSPARENT WINDOW
-    g_OverlayHwnd = CreateWindowExW(
+    // STEP 3: Create SOLID BLACK HWND (NOT transparent from start)
+    g_BlackWindow = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
         wc.lpszClassName, 
         L"",
         WS_POPUP,
-        0, 0, g_ScreenWidth, g_ScreenHeight,
+        0, 0, g_MonitorWidth, g_MonitorHeight,  // RESOLUTION SYNC
         nullptr, nullptr, wc.hInstance, nullptr);
     
-    if (!g_OverlayHwnd) return false;
+    if (!g_BlackWindow) return false;
     
-    // STEP 4: Make black color fully transparent (click-through)
-    SetLayeredWindowAttributes(g_OverlayHwnd, RGB(0, 0, 0), 0, LWA_COLORKEY);
+    // STEP 4: COLOR KEYING - Make ONLY black transparent
+    // This is the PROFESSIONAL way - draw on a "stage"
+    SetLayeredWindowAttributes(g_BlackWindow, RGB(0, 0, 0), 0, LWA_COLORKEY);
     
-    // STEP 5: Extend frame for DWM composition
+    // STEP 5: Extend frame for proper composition
     MARGINS margins = {-1, -1, -1, -1};
-    DwmExtendFrameIntoClientArea(g_OverlayHwnd, &margins);
+    DwmExtendFrameIntoClientArea(g_BlackWindow, &margins);
     
-    ShowWindow(g_OverlayHwnd, SW_SHOWDEFAULT);
-    UpdateWindow(g_OverlayHwnd);
+    ShowWindow(g_BlackWindow, SW_SHOWDEFAULT);
+    UpdateWindow(g_BlackWindow);
     
     return true;
 }
@@ -551,13 +566,13 @@ bool InitGraphics()
 {
     DXGI_SWAP_CHAIN_DESC scd = {};
     scd.BufferCount = 1;
-    scd.BufferDesc.Width = g_ScreenWidth;
-    scd.BufferDesc.Height = g_ScreenHeight;
+    scd.BufferDesc.Width = g_MonitorWidth;
+    scd.BufferDesc.Height = g_MonitorHeight;
     scd.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     scd.BufferDesc.RefreshRate.Numerator = 0;
     scd.BufferDesc.RefreshRate.Denominator = 1;
     scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    scd.OutputWindow = g_OverlayHwnd;
+    scd.OutputWindow = g_BlackWindow;
     scd.SampleDesc.Count = 1;
     scd.Windowed = TRUE;
     scd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
@@ -567,12 +582,12 @@ bool InitGraphics()
     if (FAILED(D3D11CreateDeviceAndSwapChain(
         nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
         nullptr, 0, D3D11_SDK_VERSION, &scd,
-        &g_SwapChain, &g_D3DDevice, nullptr, &g_D3DContext)))
+        &g_SwapChain, &g_Device, nullptr, &g_Context)))
         return false;
     
     ID3D11Texture2D* backBuffer = nullptr;
     g_SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&backBuffer);
-    g_D3DDevice->CreateRenderTargetView(backBuffer, nullptr, &g_RenderTarget);
+    g_Device->CreateRenderTargetView(backBuffer, nullptr, &g_RenderTarget);
     backBuffer->Release();
     
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &g_D2DFactory);
@@ -593,7 +608,7 @@ bool InitGraphics()
     g_DWriteFactory->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 16.0f, L"en-us", &g_TextFormat);
     g_DWriteFactory->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
-        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0f, L"en-us", &g_TextFormatSmall);
+        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0f, L"en-us", &g_SmallTextFormat);
     
     return true;
 }
@@ -603,7 +618,7 @@ bool InitGraphics()
 // ============================================================================
 void Cleanup()
 {
-    if (g_TextFormatSmall) g_TextFormatSmall->Release();
+    if (g_SmallTextFormat) g_SmallTextFormat->Release();
     if (g_TextFormat) g_TextFormat->Release();
     if (g_DWriteFactory) g_DWriteFactory->Release();
     if (g_Brush) g_Brush->Release();
@@ -611,33 +626,32 @@ void Cleanup()
     if (g_D2DFactory) g_D2DFactory->Release();
     if (g_RenderTarget) g_RenderTarget->Release();
     if (g_SwapChain) g_SwapChain->Release();
-    if (g_D3DContext) g_D3DContext->Release();
-    if (g_D3DDevice) g_D3DDevice->Release();
+    if (g_Context) g_Context->Release();
+    if (g_Device) g_Device->Release();
     
     DMAEngine::Shutdown();
 }
 
 // ============================================================================
-// MAIN ENTRY POINT
-// Execution Order: Startup -> Console Hardware Check -> Transparent Overlay
+// MAIN - STRICT EXECUTION ORDER
 // ============================================================================
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
 {
     // ===============================================
-    // STEP 1: CONSOLE HARDWARE CHECK (REAL)
+    // STEP 1: REAL HARDWARE CHECK (Console)
     // ===============================================
     if (!DMAEngine::Initialize())
     {
-        MessageBoxW(nullptr, L"Hardware initialization failed!", L"Error", MB_ICONERROR);
+        MessageBoxW(nullptr, L"Hardware validation failed!", L"Error", MB_ICONERROR);
         return 1;
     }
     
     // ===============================================
-    // STEP 2: CREATE THE BLACK TRANSPARENT OVERLAY
+    // STEP 2: CREATE THE BLACK WINDOW
     // ===============================================
-    if (!CreateTransparentOverlay())
+    if (!CreateBlackWindow())
     {
-        MessageBoxW(nullptr, L"Failed to create overlay window!", L"Error", MB_ICONERROR);
+        MessageBoxW(nullptr, L"Failed to create black window!", L"Error", MB_ICONERROR);
         return 1;
     }
     
@@ -651,7 +665,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
     }
     
     // ===============================================
-    // STEP 4: INITIALIZE PLAYER MANAGER
+    // STEP 4: INITIALIZE SYSTEMS
     // ===============================================
     PlayerManager::Initialize();
     
@@ -664,7 +678,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
     g_MenuVisible = false;
     
     // ===============================================
-    // MAIN RENDER LOOP - ALL DRAWING ON OVERLAY ONLY
+    // MAIN RENDER LOOP
     // ===============================================
     MSG msg = {};
     while (g_Running)
@@ -679,13 +693,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
         
         if (!g_Running) break;
         
-        // Clear with transparent black
-        float clearColor[4] = {0, 0, 0, 0};
-        g_D3DContext->ClearRenderTargetView(g_RenderTarget, clearColor);
+        // Clear to BLACK (this becomes transparent via color keying)
+        float clearColor[4] = {0, 0, 0, 1};  // Solid black
+        g_Context->ClearRenderTargetView(g_RenderTarget, clearColor);
         
-        // Begin D2D drawing - ON OVERLAY ONLY
+        // Begin D2D drawing
         g_D2DTarget->BeginDraw();
-        g_D2DTarget->Clear(Colors::Clear);
+        g_D2DTarget->Clear(Colors::Black);  // Black background (transparent via LWA_COLORKEY)
         
         // Draw only when needed
         if (g_GameRunning || g_MenuVisible)

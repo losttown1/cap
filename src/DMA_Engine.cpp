@@ -1534,18 +1534,31 @@ void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
         return;
     }
     
-    VMMDLL_SCATTER_HANDLE hScatter = VMMDLL_Scatter_Initialize(g_VMMDLL, g_DMA_PID, VMMDLL_FLAG_NOCACHE);
+    // Use PVMMDLL_SCATTER_HANDLE (pointer type) as expected by the API
+    PVMMDLL_SCATTER_HANDLE hScatter = VMMDLL_Scatter_Initialize(g_VMMDLL, g_DMA_PID, VMMDLL_FLAG_NOCACHE);
     if (!hScatter)
     {
+        // Fallback to individual reads
         for (auto& e : entries)
             if (e.buffer && e.address)
                 VMMDLL_MemReadEx(g_VMMDLL, g_DMA_PID, e.address, (PBYTE)e.buffer, (DWORD)e.size, nullptr, VMMDLL_FLAG_NOCACHE);
         return;
     }
     
-    for (auto& e : entries) if (e.address && e.size > 0) VMMDLL_Scatter_Prepare(hScatter, e.address, (DWORD)e.size);
+    // Prepare all reads
+    for (auto& e : entries) 
+        if (e.address && e.size > 0) 
+            VMMDLL_Scatter_Prepare(hScatter, e.address, (DWORD)e.size);
+    
+    // Execute single DMA transaction
     VMMDLL_Scatter_Execute(hScatter);
-    for (auto& e : entries) if (e.buffer && e.address) VMMDLL_Scatter_Read(hScatter, e.address, (DWORD)e.size, (PBYTE)e.buffer, nullptr);
+    
+    // Read results
+    for (auto& e : entries) 
+        if (e.buffer && e.address) 
+            VMMDLL_Scatter_Read(hScatter, e.address, (DWORD)e.size, (PBYTE)e.buffer, nullptr);
+    
+    // Cleanup
     VMMDLL_Scatter_CloseHandle(hScatter);
 #else
     for (auto& e : entries) if (e.buffer) memset(e.buffer, 0, e.size);

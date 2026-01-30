@@ -595,7 +595,7 @@ public:
     static uintptr_t GetModuleBase(const wchar_t* moduleName);
     static size_t GetModuleSize();
     
-private:
+    // Allow access from ProfessionalInit and other internal classes
     static bool s_Connected;
     static bool s_Online;
     static bool s_SimulationMode;

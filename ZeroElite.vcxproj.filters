@@ -9,10 +9,6 @@
       <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
       <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
     </Filter>
-    <Filter Include="Resource Files">
-      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
-      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
-    </Filter>
     <Filter Include="Source Files\ImGui">
       <UniqueIdentifier>{3A8D0C9F-4E5B-6D7A-8B9C-0E1F2D3A4B5C}</UniqueIdentifier>
     </Filter>
@@ -24,9 +20,6 @@
     </Filter>
     <Filter Include="Header Files\ZeroElite">
       <UniqueIdentifier>{9E1F2A3B-0C1D-2E3F-4A5B-6C7D8E9F0A1B}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Libraries">
-      <UniqueIdentifier>{0A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -83,10 +76,5 @@
     <ClInclude Include="src\DMA_Engine.hpp">
       <Filter>Header Files\ZeroElite</Filter>
     </ClInclude>
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="libs\vmmdll.lib">
-      <Filter>Libraries</Filter>
-    </None>
   </ItemGroup>
 </Project>

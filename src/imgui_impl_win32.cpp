@@ -8,6 +8,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <Windows.h>
+#include <windowsx.h>  // For GET_X_LPARAM and GET_Y_LPARAM
 #include <tchar.h>
 #include <dwmapi.h>
 

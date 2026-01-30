@@ -5,6 +5,10 @@
 #pragma once
 
 #include "imgui.h"
+#include <cmath>
+#include <algorithm>
+#include <cstring>
+#include <cstdlib>
 
 #ifndef IMGUI_DISABLE
 

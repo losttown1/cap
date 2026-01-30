@@ -1,6 +1,9 @@
 // VMMDLL - Virtual Memory Manager DLL Interface
 // Zero Elite - DMA Memory Interface Header
 
+#ifndef VMMDLL_H
+#define VMMDLL_H
+
 #pragma once
 
 #include <windows.h>
@@ -40,7 +43,7 @@ typedef struct tdVMMDLL_PROCESS_INFORMATION {
     CHAR szNameLong[64];
     ULONG64 paDTB;
     ULONG64 paDTB_UserOpt;
-    union { ULONG64 vaEPROCESS; ULONG64 vaPEB32; };
+    union { ULONG64 vaEPROCESS; ULONG64 vaPEB32_64; };
     ULONG64 vaPEB;
     BOOL fWow64;
     DWORD vaPEB32;
@@ -269,3 +272,5 @@ __declspec(dllimport) BOOL VMMDLL_Map_GetPhysMem(
 #ifdef __cplusplus
 }
 #endif
+
+#endif // VMMDLL_H

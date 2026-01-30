@@ -14,6 +14,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#include <cmath>
+#include <algorithm>
+#include <float.h>
 
 #ifdef _MSC_VER
 #pragma warning(disable: 4127)  // conditional expression is constant
@@ -31,6 +34,61 @@
 //-----------------------------------------------------------------------------
 // [SECTION] CONTEXT AND MEMORY ALLOCATORS
 //-----------------------------------------------------------------------------
+
+// ImDrawListSharedData definition
+struct ImDrawListSharedData
+{
+    ImVec2 TexUvWhitePixel;
+    ImFont* Font;
+    float FontSize;
+    float CurveTessellationTol;
+    float CircleSegmentMaxError;
+    ImVec4 ClipRectFullscreen;
+    ImDrawListFlags InitialFlags;
+    
+    ImDrawListSharedData()
+    {
+        Font = nullptr;
+        FontSize = 0.0f;
+        CurveTessellationTol = 0.0f;
+        CircleSegmentMaxError = 0.0f;
+        InitialFlags = 0;
+    }
+};
+
+// ImGuiContext definition
+struct ImGuiContext
+{
+    bool Initialized;
+    ImGuiIO IO;
+    ImGuiStyle Style;
+    ImFont* Font;
+    float FontSize;
+    float FontBaseSize;
+    ImDrawListSharedData DrawListSharedData;
+    double Time;
+    int FrameCount;
+    int FrameCountEnded;
+    int FrameCountRendered;
+    bool WithinFrameScope;
+    bool WithinFrameScopeWithImplicitWindow;
+    bool WithinEndChild;
+    bool GcCompactAll;
+    bool TestEngineHookItems;
+    void* TestEngine;
+    
+    ImGuiContext() 
+    {
+        Initialized = false;
+        Font = nullptr;
+        FontSize = FontBaseSize = 0.0f;
+        Time = 0.0;
+        FrameCount = FrameCountEnded = FrameCountRendered = 0;
+        WithinFrameScope = WithinFrameScopeWithImplicitWindow = WithinEndChild = false;
+        GcCompactAll = TestEngineHookItems = false;
+        TestEngine = nullptr;
+    }
+};
 
 static ImGuiContext* GImGui = nullptr;
 

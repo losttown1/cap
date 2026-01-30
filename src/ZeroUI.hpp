@@ -3,20 +3,16 @@
 
 #include <imgui.h>
 
-// تعريف المتغيرات العامة للتحكم من ملفات أخرى
+// Global settings accessible from other files
 extern bool esp_enabled;
 extern bool aimbot_enabled;
 extern float refresh_rate;
 extern float box_color[4];
 
-// تعريف دالة رسم القائمة
-void RenderZeroMenu();
-
-// دوال التهيئة والإغلاق
+// UI functions
 void InitializeZeroUI();
 void ShutdownZeroUI();
-
-// دوال التحكم بظهور القائمة
+void RenderZeroMenu();
 void ToggleZeroMenu();
 bool IsZeroMenuVisible();
 void SetZeroMenuVisible(bool visible);

@@ -1,10 +1,12 @@
 // ZeroMain.cpp - Zero Elite Main Entry Point
 // DirectX 11 Transparent Overlay with ImGui
+// Fixed input handling with proper debouncing
 
 #include <Windows.h>
 #include <d3d11.h>
 #include <dwmapi.h>
 #include <iostream>
+#include <chrono>
 
 // ImGui includes
 #include "../include/imgui.h"
@@ -30,6 +32,12 @@ static ID3D11RenderTargetView*  g_mainRenderTargetView = nullptr;
 static HWND                     g_hWnd = nullptr;
 static bool                     g_bRunning = true;
 static WNDCLASSEXW              g_wc = {};
+
+// Input state tracking for debouncing
+static bool g_InsertKeyWasPressed = false;
+static bool g_EndKeyWasPressed = false;
+static ULONGLONG g_LastToggleTime = 0;
+const ULONGLONG DEBOUNCE_DELAY_MS = 200; // 200ms debounce
 
 // Overlay configuration
 constexpr const wchar_t* WINDOW_CLASS_NAME = L"ZeroEliteOverlayClass";
@@ -258,34 +266,6 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             return 0;
 
-        case WM_KEYDOWN:
-            // INSERT key to toggle menu
-            if (wParam == VK_INSERT)
-            {
-                ToggleZeroMenu();
-                UpdateWindowClickthrough();
-            }
-            // ESC to close menu
-            else if (wParam == VK_ESCAPE)
-            {
-                if (IsZeroMenuVisible())
-                {
-                    SetZeroMenuVisible(false);
-                    UpdateWindowClickthrough();
-                }
-            }
-            // F1 to toggle ESP
-            else if (wParam == VK_F1)
-            {
-                // ESP toggle handled in ZeroUI
-            }
-            // END key to exit
-            else if (wParam == VK_END)
-            {
-                g_bRunning = false;
-            }
-            return 0;
-
         case WM_SYSCOMMAND:
             if ((wParam & 0xfff0) == SC_KEYMENU)
             {
@@ -301,6 +281,26 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
+// Check if key was just pressed (with debouncing)
+bool IsKeyJustPressed(int vKey, bool& wasPressed, ULONGLONG& lastTime)
+{
+    bool isPressed = (GetAsyncKeyState(vKey) & 0x8000) != 0;
+    ULONGLONG currentTime = GetTickCount64();
+    
+    if (isPressed && !wasPressed && (currentTime - lastTime) > DEBOUNCE_DELAY_MS)
+    {
+        wasPressed = true;
+        lastTime = currentTime;
+        return true;
+    }
+    else if (!isPressed)
+    {
+        wasPressed = false;
+    }
+    
+    return false;
+}
+
 // Main entry point
 int APIENTRY wWinMain(
     _In_ HINSTANCE hInstance,
@@ -314,15 +314,13 @@ int APIENTRY wWinMain(
     UNREFERENCED_PARAMETER(nCmdShow);
 
     // Allocate console for debug output
-    #ifdef _DEBUG
     AllocConsole();
     FILE* pFile = nullptr;
     freopen_s(&pFile, "CONOUT$", "w", stdout);
     freopen_s(&pFile, "CONOUT$", "w", stderr);
-    #endif
 
     std::cout << "========================================" << std::endl;
-    std::cout << "        Zero Elite - Game Overlay       " << std::endl;
+    std::cout << "   PROJECT ZERO - BO6 Radar Overlay    " << std::endl;
     std::cout << "========================================" << std::endl;
     std::cout << std::endl;
 
@@ -361,16 +359,15 @@ int APIENTRY wWinMain(
     // Initialize Zero Elite UI
     InitializeZeroUI();
 
-    // Initialize DMA Engine with target PID: 35028 and Handle: 0x021EE040
+    // Initialize DMA Engine
     if (InitializeZeroDMA())
     {
         std::cout << "[PROJECT ZERO] DMA Engine initialized" << std::endl;
-        std::cout << "[PROJECT ZERO] Target PID: " << TARGET_PID << std::endl;
-        std::cout << "[PROJECT ZERO] Target Handle: 0x" << std::hex << TARGET_HANDLE << std::dec << std::endl;
     }
     else
     {
-        std::cout << "[PROJECT ZERO] DMA Engine initialization failed (continuing without DMA)" << std::endl;
+        std::cout << "[PROJECT ZERO] DMA Engine initialization failed" << std::endl;
+        std::cout << "[PROJECT ZERO] Running in overlay-only mode" << std::endl;
     }
 
     std::cout << std::endl;
@@ -382,11 +379,15 @@ int APIENTRY wWinMain(
     // Clear background color (transparent)
     const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 
+    // Input state tracking
+    static ULONGLONG lastInsertToggle = 0;
+    static ULONGLONG lastEndToggle = 0;
+
     // Main loop
     MSG msg = {};
     while (g_bRunning)
     {
-        // Process Windows messages
+        // Process Windows messages (non-blocking)
         while (PeekMessageW(&msg, nullptr, 0U, 0U, PM_REMOVE))
         {
             TranslateMessage(&msg);
@@ -402,16 +403,20 @@ int APIENTRY wWinMain(
             break;
         }
 
-        // Handle hotkeys (alternative method for when window doesn't have focus)
-        if (GetAsyncKeyState(VK_INSERT) & 1)
+        // Handle INSERT key with proper debouncing
+        if (IsKeyJustPressed(VK_INSERT, g_InsertKeyWasPressed, lastInsertToggle))
         {
             ToggleZeroMenu();
             UpdateWindowClickthrough();
+            std::cout << "[Zero Elite] Menu " << (IsZeroMenuVisible() ? "Opened" : "Closed") << std::endl;
         }
 
-        if (GetAsyncKeyState(VK_END) & 1)
+        // Handle END key to exit
+        if (IsKeyJustPressed(VK_END, g_EndKeyWasPressed, lastEndToggle))
         {
+            std::cout << "[Zero Elite] Exit requested" << std::endl;
             g_bRunning = false;
+            break;
         }
 
         // Start ImGui frame
@@ -419,8 +424,12 @@ int APIENTRY wWinMain(
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        // Render Zero Elite UI
+        // Render Zero Elite UI and Radar
         RenderZeroMenu();
+        
+        // Render radar overlay (always visible if enabled)
+        extern void RenderRadarOverlay();
+        RenderRadarOverlay();
 
         // End ImGui frame
         ImGui::EndFrame();
@@ -435,14 +444,14 @@ int APIENTRY wWinMain(
 
         // Present the frame
         int refreshRate = static_cast<int>(refresh_rate);
-        UINT syncInterval = (refreshRate >= 60) ? 1 : 0;
+        if (refreshRate < 30) refreshRate = 30;
+        if (refreshRate > 240) refreshRate = 240;
+        
+        UINT syncInterval = 1; // VSync on
         g_pSwapChain->Present(syncInterval, 0);
 
-        // Optional: Limit frame rate when menu is hidden to reduce CPU usage
-        if (!IsZeroMenuVisible())
-        {
-            Sleep(1000 / refreshRate);
-        }
+        // Small sleep to prevent CPU hogging
+        Sleep(1);
     }
 
     std::cout << std::endl;
@@ -462,9 +471,7 @@ int APIENTRY wWinMain(
 
     std::cout << "[Zero Elite] Shutdown complete. Goodbye!" << std::endl;
 
-    #ifdef _DEBUG
     FreeConsole();
-    #endif
 
     return 0;
 }

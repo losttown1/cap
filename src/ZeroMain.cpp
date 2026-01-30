@@ -1,7 +1,10 @@
 // ZeroMain.cpp - Fully Automatic v3.4
 // Direct Launch, Quiet Mode, No Manual Input Required
 
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+
 #include <Windows.h>
 #include <dwmapi.h>
 #include <d3d11.h>
@@ -165,7 +168,7 @@ void UpdateThread()
 // ============================================================================
 inline void SetBrushColor(const D2D1_COLOR_F& c) { if (g_Brush) g_Brush->SetColor(c); }
 
-void DrawText2D(const wchar_t* text, float x, float y, const D2D1_COLOR_F& color, bool small = false)
+void RenderText(const wchar_t* text, float x, float y, const D2D1_COLOR_F& color, bool small)
 {
     if (!g_D2DTarget || !g_Brush) return;
     SetBrushColor(color);
@@ -180,21 +183,21 @@ void FillRect2D(float x, float y, float w, float h, const D2D1_COLOR_F& c)
     g_D2DTarget->FillRectangle(D2D1::RectF(x, y, x + w, y + h), g_Brush);
 }
 
-void DrawRect2D(float x, float y, float w, float h, const D2D1_COLOR_F& c, float stroke = 1.0f)
+void DrawRect2D(float x, float y, float w, float h, const D2D1_COLOR_F& c, float stroke)
 {
     if (!g_D2DTarget || !g_Brush) return;
     SetBrushColor(c);
     g_D2DTarget->DrawRectangle(D2D1::RectF(x, y, x + w, y + h), g_Brush, stroke);
 }
 
-void DrawLine2D(float x1, float y1, float x2, float y2, const D2D1_COLOR_F& c, float stroke = 1.0f)
+void DrawLine2D(float x1, float y1, float x2, float y2, const D2D1_COLOR_F& c, float stroke)
 {
     if (!g_D2DTarget || !g_Brush) return;
     SetBrushColor(c);
     g_D2DTarget->DrawLine(D2D1::Point2F(x1, y1), D2D1::Point2F(x2, y2), g_Brush, stroke);
 }
 
-void DrawCircle2D(float cx, float cy, float r, const D2D1_COLOR_F& c, float stroke = 1.0f)
+void DrawCircle2D(float cx, float cy, float r, const D2D1_COLOR_F& c, float stroke)
 {
     if (!g_D2DTarget || !g_Brush) return;
     SetBrushColor(c);
@@ -231,7 +234,7 @@ bool Toggle(const wchar_t* label, float x, float y, bool* value)
     DrawRoundedRect2D(x, y, w, h, h/2, bg);
     float knobX = *value ? x + w - h + 2 : x + 2;
     FillCircle2D(knobX + (h-4)/2, y + h/2, (h-4)/2, Colors::White);
-    DrawText2D(label, x + w + 10, y, Colors::White, true);
+    RenderText(label, x + w + 10, y, Colors::White, true);
     
     if (g_MouseDown && InRect((float)g_MousePos.x, (float)g_MousePos.y, x, y, w + 150, h))
     {
@@ -245,7 +248,7 @@ bool Toggle(const wchar_t* label, float x, float y, bool* value)
 bool Slider(const wchar_t* label, float x, float y, float* value, float minVal, float maxVal)
 {
     float w = 150, h = 6;
-    DrawText2D(label, x, y - 18, Colors::White, true);
+    RenderText(label, x, y - 18, Colors::White, true);
     
     FillRect2D(x, y + 7, w, h, Colors::Gray);
     float pct = (*value - minVal) / (maxVal - minVal);
@@ -254,7 +257,7 @@ bool Slider(const wchar_t* label, float x, float y, float* value, float minVal, 
     
     wchar_t valStr[16];
     swprintf_s(valStr, L"%.1f", *value);
-    DrawText2D(valStr, x + w + 10, y - 2, Colors::Gray, true);
+    RenderText(valStr, x + w + 10, y - 2, Colors::Gray, true);
     
     if (g_MouseDown && InRect((float)g_MousePos.x, (float)g_MousePos.y, x - 5, y, w + 10, 20))
     {
@@ -313,14 +316,14 @@ void RenderESP()
         {
             wchar_t nameW[32];
             mbstowcs_s(nullptr, nameW, p.name, 31);
-            DrawText2D(nameW, screenX - 30, screenY - boxH - 18, Colors::White, true);
+            RenderText(nameW, screenX - 30, screenY - boxH - 18, Colors::White, true);
         }
         
         if (g_Settings.espDistance)
         {
             wchar_t distStr[16];
             swprintf_s(distStr, L"%.0fm", p.distance);
-            DrawText2D(distStr, screenX - 15, screenY + 5, Colors::Yellow, true);
+            RenderText(distStr, screenX - 15, screenY + 5, Colors::Yellow, true);
         }
     }
 }
@@ -336,8 +339,8 @@ void RenderCrosshair()
     float cy = (float)g_Height / 2;
     float size = 8;
     
-    DrawLine2D(cx - size, cy, cx + size, cy, Colors::White, 2);
-    DrawLine2D(cx, cy - size, cx, cy + size, Colors::White, 2);
+    DrawLine2D(cx - size, cy, cx + size, cy, Colors::White, 2.0f);
+    DrawLine2D(cx, cy - size, cx, cy + size, Colors::White, 2.0f);
 }
 
 // ============================================================================
@@ -354,8 +357,8 @@ void RenderRadar()
     FillCircle2D(cx, cy, size/2, D2D1_COLOR_F{0.1f, 0.1f, 0.1f, 0.85f});
     DrawCircle2D(cx, cy, size/2, Colors::Accent, 2.0f);
     
-    DrawLine2D(cx - size/2, cy, cx + size/2, cy, D2D1_COLOR_F{0.3f, 0.3f, 0.3f, 0.5f});
-    DrawLine2D(cx, cy - size/2, cx, cy + size/2, D2D1_COLOR_F{0.3f, 0.3f, 0.3f, 0.5f});
+    DrawLine2D(cx - size/2, cy, cx + size/2, cy, D2D1_COLOR_F{0.3f, 0.3f, 0.3f, 0.5f}, 1.0f);
+    DrawLine2D(cx, cy - size/2, cx, cy + size/2, D2D1_COLOR_F{0.3f, 0.3f, 0.3f, 0.5f}, 1.0f);
     
     FillCircle2D(cx, cy, 4, Colors::Blue);
     
@@ -385,7 +388,7 @@ void RenderRadar()
         FillCircle2D(radarPos.x, radarPos.y, 4, dotColor);
     }
     
-    DrawText2D(L"RADAR", cx - 20, cy + size/2 + 5, Colors::White, true);
+    RenderText(L"RADAR", cx - 20, cy + size/2 + 5, Colors::White, true);
 }
 
 // ============================================================================
@@ -403,7 +406,7 @@ void RenderMenu()
     DrawRoundedRect2D(menuX, menuY, menuW, menuH, 10, Colors::Background);
     
     FillRect2D(menuX, menuY, menuW, 40, Colors::Accent);
-    DrawText2D(L"PROJECT ZERO | v3.4", menuX + 10, menuY + 8, Colors::White);
+    RenderText(L"PROJECT ZERO | v3.4", menuX + 10, menuY + 8, Colors::White, false);
     
     bool isOnline = DMAEngine::IsOnline();
     D2D1_COLOR_F statusColor = isOnline ? Colors::Green : Colors::Yellow;
@@ -416,7 +419,7 @@ void RenderMenu()
         float tabX = menuX + 10 + i * 95;
         D2D1_COLOR_F tabColor = (i == g_CurrentTab) ? Colors::Accent : Colors::DarkGray;
         DrawRoundedRect2D(tabX, tabY, 90, 30, 5, tabColor);
-        DrawText2D(tabs[i], tabX + 20, tabY + 5, Colors::White, true);
+        RenderText(tabs[i], tabX + 25, tabY + 5, Colors::White, true);
         
         if (g_MouseDown && InRect((float)g_MousePos.x, (float)g_MousePos.y, tabX, tabY, 90, 30))
         {
@@ -453,14 +456,14 @@ void RenderMenu()
         {
             wchar_t kmStatus[64];
             swprintf_s(kmStatus, L"KMBox: %S", HardwareController::IsConnected() ? "AUTO-LOCKED" : "Software");
-            DrawText2D(kmStatus, contentX, contentY + 200, 
+            RenderText(kmStatus, contentX, contentY + 200, 
                        HardwareController::IsConnected() ? Colors::Green : Colors::Yellow, true);
             
             if (HardwareController::IsConnected())
             {
                 wchar_t portInfo[32];
                 swprintf_s(portInfo, L"Port: %S", HardwareController::GetLockedPort());
-                DrawText2D(portInfo, contentX, contentY + 225, Colors::Gray, true);
+                RenderText(portInfo, contentX, contentY + 225, Colors::Gray, true);
             }
         }
         break;
@@ -469,22 +472,22 @@ void RenderMenu()
         {
             wchar_t dmaStatus[64];
             swprintf_s(dmaStatus, L"DMA: %S", DMAEngine::GetStatus());
-            DrawText2D(dmaStatus, contentX, contentY, Colors::White, true);
+            RenderText(dmaStatus, contentX, contentY, Colors::White, true);
             
             wchar_t cloudStatus[64];
             swprintf_s(cloudStatus, L"Offsets: %s", OffsetUpdater::s_Synced ? L"CLOUD" : L"LOCAL");
-            DrawText2D(cloudStatus, contentX, contentY + 25, 
+            RenderText(cloudStatus, contentX, contentY + 25, 
                        OffsetUpdater::s_Synced ? Colors::Green : Colors::Yellow, true);
             
             wchar_t modeInfo[32];
             swprintf_s(modeInfo, L"Mode: %s", DMAEngine::s_SimulationMode ? L"SIMULATION" : L"HARDWARE");
-            DrawText2D(modeInfo, contentX, contentY + 50, Colors::White, true);
+            RenderText(modeInfo, contentX, contentY + 50, Colors::White, true);
             
-            DrawText2D(L"---", contentX, contentY + 85, Colors::Gray, true);
-            DrawText2D(L"INSERT - Toggle Menu", contentX, contentY + 110, Colors::Gray, true);
-            DrawText2D(L"END - Exit", contentX, contentY + 135, Colors::Gray, true);
-            DrawText2D(L"---", contentX, contentY + 170, Colors::Gray, true);
-            DrawText2D(L"Fully Automatic Mode", contentX, contentY + 195, Colors::Green, true);
+            RenderText(L"---", contentX, contentY + 85, Colors::Gray, true);
+            RenderText(L"INSERT - Toggle Menu", contentX, contentY + 110, Colors::Gray, true);
+            RenderText(L"END - Exit", contentX, contentY + 135, Colors::Gray, true);
+            RenderText(L"---", contentX, contentY + 170, Colors::Gray, true);
+            RenderText(L"Fully Automatic Mode", contentX, contentY + 195, Colors::Green, true);
         }
         break;
     }

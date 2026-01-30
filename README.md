@@ -1,81 +1,167 @@
-# PROJECT ZERO | BO6 DMA
+# PROJECT ZERO | BO6 DMA v2.2
 
-Professional DMA Overlay for Black Ops 6 with Radar, ESP, and Aimbot.
+Professional DMA Overlay for Black Ops 6 with Scatter Registry, Map Textures, and Config-driven Initialization.
 
-## Screenshots
+## Professional Features
 
-The application displays:
-- **Menu** (Left side) - Dark/Red themed with tabs: AIMBOT, VISUALS, RADAR, MISC
-- **Radar** (Top right corner) - Standalone window showing player positions
-- **ESP** - Boxes, health bars, names on players
-- **Status Indicator** - Shows ONLINE (green) when DMA is connected
+### 1. Scatter Read Registry (Maximum Performance)
 
-## Features
+Instead of reading player data randomly, we batch ALL reads into a single DMA transaction:
 
-### Auto-Launch
-- Menu appears **immediately** when you start the program
-- No need to press INSERT to show menu initially
-- INSERT key toggles menu on/off after startup
+```cpp
+// Every frame, this is ONE transaction instead of hundreds
+g_ScatterRegistry.Clear();
+for (int i = 0; i < playerCount; i++) {
+    g_ScatterRegistry.RegisterPlayerData(i, entityAddr);
+}
+g_ScatterRegistry.RegisterLocalPlayer(localAddr);
+g_ScatterRegistry.RegisterViewMatrix(viewMatrixAddr);
+g_ScatterRegistry.ExecuteAll();  // ONE DMA call!
+```
 
-### DMA Engine
-- **DMA_ENABLED = 1** by default (ready for FPGA hardware)
-- **Scatter Reads** - Batches all memory reads for maximum performance
-- **Pattern Scanner (AOB Scan)** - Automatically finds game offsets
-- Falls back to simulation mode if FPGA not connected
+**Benefits:**
+- Up to 10x faster than individual reads
+- Reduced DMA latency
+- Smoother radar updates
 
-### Pattern Scanner
-Automatically scans for game addresses using these patterns:
-- `PlayerBase`: `48 8B 05 ? ? ? ? 48 8B 88 ? ? ? ? 48 8B 01`
-- `ClientInfo`: `48 8B 1D ? ? ? ? 48 85 DB 74 ? 48 8B 03`
-- `EntityList`: `48 8D 0D ? ? ? ? E8 ? ? ? ? 48 85 C0 74`
-- `ViewMatrix`: `48 8B 15 ? ? ? ? 48 8D 4C 24 ? E8`
+### 2. Map Texture Support
 
-### Aimbot Tab
-- Enable/Disable toggle
-- FOV slider (10-300)
-- Smoothness control (1-20)
+Load real game map images as radar backgrounds:
+
+```ini
+[Map]
+ImagePath=maps/nuketown.png
+ScaleX=1.0
+ScaleY=1.0
+OffsetX=0.0
+OffsetY=0.0
+Rotation=0.0
+```
+
+**Features:**
+- PNG/JPG support
+- Coordinate calibration (scale, offset, rotation)
+- Pre-configured BO6 map database
+- Toggle on/off in Radar tab
+
+### 3. Hardware-ID Masking (Config-driven Init)
+
+Load device settings from `zero.ini` instead of hardcoding:
+
+```ini
+[Device]
+Type=fpga
+Arg=
+Algorithm=0
+UseCustomPCIe=0
+CustomPCIeID=
+```
+
+**Security Benefits:**
+- No unique signatures in code
+- Change device ID without recompiling
+- Switch between DMA devices easily
+
+## Configuration File (zero.ini)
+
+The program automatically creates this file on first run:
+
+```ini
+; PROJECT ZERO - Configuration File
+; Hardware-ID Masking: Change device settings to avoid detection
+
+[Device]
+Type=fpga
+Arg=
+Algorithm=0
+UseCustomPCIe=0
+CustomPCIeID=
+
+[Target]
+ProcessName=cod.exe
+
+[Performance]
+ScatterBatchSize=128
+UpdateRateHz=120
+UseScatterRegistry=1
+
+[Map]
+ImagePath=
+ScaleX=1.0
+ScaleY=1.0
+OffsetX=0.0
+OffsetY=0.0
+Rotation=0.0
+
+[Debug]
+DebugMode=0
+LogReads=0
+```
+
+## UI Tabs
+
+### AIMBOT
+- Enable/Disable
+- FOV (10-300)
+- Smoothness (1-20)
 - Max Distance (10-500m)
-- Target Bone selection (Head/Neck/Chest)
-- Visibility Check option
-- Show FOV Circle toggle
+- Target Bone (Head/Neck/Chest)
+- Visibility Check
+- Show FOV Circle
 
-### Visuals Tab (ESP)
-- Box ESP (2D or Corner style)
+### VISUALS (ESP)
+- Box ESP (2D/Corner)
 - Skeleton ESP
-- Health Bars (color changes based on HP)
+- Health Bars
 - Name Tags
-- Distance display
-- Snaplines (from Top/Center/Bottom)
-- Show Teammates option
+- Distance
+- Snaplines (Top/Center/Bottom)
+- Show Teammates
 
-### Radar Tab
-- 2D Radar with player dots
-- Size adjustment (150-350px)
-- Zoom control (0.5x-4x)
-- Show/Hide Enemies
-- Show/Hide Teammates
-- Player count display
+### RADAR
+- Enable/Disable
+- Size (150-350px)
+- Zoom (0.5x-4x)
+- Show Enemies
+- Show Teammates
+- Use Map Texture
 
-### Misc Tab
-- No Recoil (placeholder)
-- Rapid Fire (placeholder)
-- Crosshair overlay (Cross/Dot/Circle styles)
-- Crosshair size adjustment
-- Stream Proof mode (placeholder)
+### MISC
+- No Recoil
+- Rapid Fire
+- Crosshair (Cross/Dot/Circle)
+- Stream Proof
+- Show Performance Stats
+
+### CONFIG
+- Device info
+- Process name
+- Scatter batch size
+- Update rate
+- Pattern scan status
+- Map texture status
+
+## Performance Stats (Bottom Left)
+
+When enabled, shows:
+- FPS
+- Scatter reads per frame
+- Total bytes per frame
+- Device info
+- Pattern scan count
 
 ## Controls
 
 | Key | Action |
 |-----|--------|
-| **INSERT** | Toggle Menu Visibility |
-| **END** | Exit Program |
-| **Mouse** | Click & Drag controls |
+| INSERT | Toggle Menu |
+| END | Exit Program |
+| Mouse | Interact with Menu |
 
 ## Status Indicator
 
-The status shows DMA connection state:
-- **ONLINE** (Green) - FPGA connected and cod.exe found
-- **SIMULATION** (Yellow) - Running in demo mode
+- **ONLINE** (Green) - FPGA connected, process found
+- **SIMULATION** (Yellow) - Demo mode
 - **FPGA ERROR** (Red) - Hardware not detected
 - **PROCESS NOT FOUND** (Red) - cod.exe not running
 
@@ -84,82 +170,78 @@ The status shows DMA connection state:
 ### Requirements
 - Visual Studio 2022
 - Windows 10/11 SDK
-- DirectX 11 (included with Windows)
+- DirectX 11
 
-### For DMA Hardware
-1. Ensure `vmmdll.lib` is in `libs/` folder
-2. Place `vmmdll.dll`, `leechcore.dll`, `FTD3XX.dll` next to exe
-3. `DMA_ENABLED` is already set to `1`
-4. Build in **Release | x64**
+### Steps
+1. Open `ZeroElite.sln`
+2. Select **Release | x64**
+3. Build (Ctrl+Shift+B)
+4. Place `vmmdll.dll` + dependencies next to exe
+5. Run `ZeroElite.exe`
 
-### Without DMA Hardware
-The program will run in **Simulation Mode** with animated test players.
-This is useful for testing UI and features.
+## Adding Custom Maps
 
-## Project Structure
+1. Get map image (PNG/JPG)
+2. Find game coordinate bounds
+3. Add to `zero.ini`:
+
+```ini
+[Map]
+ImagePath=maps/your_map.png
+ScaleX=1.0
+ScaleY=1.0
+OffsetX=0.0
+OffsetY=0.0
+Rotation=0.0
+```
+
+4. Or add to code:
+
+```cpp
+MapTextureManager::SetMapBounds("mp_custom", -5000, 5000, -5000, 5000);
+```
+
+## Pattern Scanner
+
+Automatically finds game addresses:
+
+| Pattern | Purpose |
+|---------|---------|
+| `48 8B 05 ?? ?? ?? ?? 48 8B 88` | Player Base |
+| `48 8B 1D ?? ?? ?? ?? 48 85 DB 74` | Client Info |
+| `48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 85 C0 74` | Entity List |
+| `48 8B 15 ?? ?? ?? ?? 48 8D 4C 24 ?? E8` | View Matrix |
+
+## File Structure
 
 ```
 ZeroElite/
 ├── src/
-│   ├── ZeroMain.cpp      # Main app, window, rendering, UI
-│   ├── ZeroUI.cpp        # UI stubs (for compatibility)
-│   ├── ZeroUI.hpp        # UI declarations
-│   ├── DMA_Engine.cpp    # DMA, Scatter, Pattern Scanner
-│   └── DMA_Engine.hpp    # DMA structures
+│   ├── ZeroMain.cpp      # Main, UI, Rendering
+│   ├── DMA_Engine.cpp    # DMA, Scatter, Patterns
+│   ├── DMA_Engine.hpp    # Definitions
+│   ├── ZeroUI.cpp        # Stubs
+│   └── ZeroUI.hpp        # Stubs
 ├── include/
-│   └── vmmdll.h          # VMMDLL header
+│   └── vmmdll.h
 ├── libs/
-│   └── vmmdll.lib        # VMMDLL library
+│   └── vmmdll.lib
+├── zero.ini              # Config (auto-created)
 ├── ZeroElite.sln
-├── ZeroElite.vcxproj
 └── README.md
 ```
 
-## Technical Details
+## Version History
 
-### Performance Optimizations
-- **V-Sync OFF** - Minimal input lag
-- **Scatter Reads** - Single DMA request for all players
-- **120Hz Update Thread** - Smooth radar updates
-- **Direct2D Rendering** - Hardware accelerated 2D
-
-### Overlay Technology
-- Transparent window with `WS_EX_LAYERED`
-- Click-through when menu hidden (`WS_EX_TRANSPARENT`)
-- Always-on-top (`WS_EX_TOPMOST`)
-- DWM glass effect for true transparency
-
-### Threading Model
-- **Main Thread** - Window messages + Rendering
-- **Input Thread** - Keyboard monitoring (non-blocking)
-- **Update Thread** - Player data reading/simulation
-
-## Adding New Patterns
-
-To add a new pattern for auto-offset:
-
-```cpp
-// In DMA_Engine.hpp - Add to Patterns namespace
-constexpr const char* NewPattern = "\x48\x89\x5C\x24\x00\x57";
-constexpr const char* NewPatternMask = "xxxx?x";
-
-// In DMA_Engine.cpp - UpdateAllOffsets()
-addr = FindPattern(baseAddr, moduleSize, Patterns::NewPattern, Patterns::NewPatternMask);
-if (addr) {
-    g_Offsets.NewOffset = ResolveRelative(addr, 3, 7);
-    if (g_Offsets.NewOffset) s_FoundCount++;
-}
-```
-
-## Process Name
-
-Target: `cod.exe` (Call of Duty unified engine)
-
-## Version
-
-**PROJECT ZERO v2.1** - Professional DMA Radar
+- **v2.2** - Scatter Registry, Map Textures, Config File
+- **v2.1** - Pattern Scanner, Full Feature Set
+- **v2.0** - Direct2D UI, Auto-Launch Menu
+- **v1.0** - Initial ImGui version
 
 ## Disclaimer
 
-This software is for educational purposes only.
-Use at your own risk. Developer is not responsible for any consequences.
+Educational purposes only. Use at your own risk.
+
+---
+
+**PROJECT ZERO v2.2** - Professional DMA Radar

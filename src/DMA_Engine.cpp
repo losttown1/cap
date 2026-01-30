@@ -1,306 +1,385 @@
-// PROJECT ZERO - DMA Engine & Radar
-// Simplified reliable implementation
-
+// DMA_Engine.cpp - DMA Implementation with Scatter Reads
 #include "DMA_Engine.hpp"
-#include "ZeroUI.hpp"
-#include "../include/imgui.h"
-#include <iostream>
+#include <cstring>
+#include <cstdlib>
 #include <cmath>
 #include <ctime>
-#include <cstdlib>
-#include <vector>
 
-#define PI 3.14159265f
+#if DMA_ENABLED
+#include <vmmdll.h>
+#pragma comment(lib, "vmmdll.lib")
+static VMM_HANDLE g_VMMDLL = nullptr;
+static DWORD g_DMA_PID = 0;
+#endif
 
-// External settings
-extern float g_RadarSize;
-extern float g_RadarZoom;
-extern bool g_ShowEnemies;
-extern bool g_ShowTeam;
-extern float box_color[4];
-extern float team_color[4];
+// ============================================================================
+// STATIC MEMBERS
+// ============================================================================
+bool DMAEngine::s_Connected = false;
+uintptr_t DMAEngine::s_BaseAddress = 0;
+uint32_t DMAEngine::s_ProcessId = 0;
 
-extern bool g_ESP_Box;
-extern bool g_ESP_Skeleton;
-extern bool g_ESP_Health;
-extern bool g_ESP_Name;
-extern bool g_ESP_Distance;
-extern bool g_ESP_HeadCircle;
-extern bool g_ESP_Snapline;
-extern int g_ESP_BoxType;
+std::vector<PlayerData> PlayerManager::s_Players;
+PlayerData PlayerManager::s_LocalPlayer;
 
-// State
-static bool g_Connected = false;
-static std::vector<PlayerData> g_Players;
-static Vec3 g_LocalPos(0, 0, 0);
-static float g_LocalYaw = 0.0f;
-static float g_ScreenW = 1280.0f;
-static float g_ScreenH = 720.0f;
-
-bool InitializeZeroDMA()
+// ============================================================================
+// SCATTER READER
+// ============================================================================
+void ScatterReader::AddRead(uintptr_t addr, void* buf, size_t size)
 {
-    g_Connected = true;
-    
-    // Create test players
-    srand((unsigned)time(nullptr));
-    g_Players.clear();
-    
-    for (int i = 0; i < 12; i++)
+    requests.push_back({addr, buf, size});
+}
+
+void ScatterReader::Execute()
+{
+#if DMA_ENABLED
+    // Real DMA scatter implementation would batch all reads here
+    // VMMDLL_Scatter_Execute is used for this
+    for (auto& req : requests)
     {
-        PlayerData p = {};
-        p.valid = true;
-        p.isEnemy = (i < 6);
-        p.health = 20 + rand() % 80;
-        p.maxHealth = 100;
-        p.team = p.isEnemy ? 2 : 1;
-        p.isVisible = (rand() % 2) == 0;
-        
-        float angle = (float)i * (2.0f * PI / 12.0f);
-        float dist = 10.0f + (float)(rand() % 30);
-        p.position = Vec3(cosf(angle) * dist, sinf(angle) * dist, 0);
-        p.yaw = (float)(rand() % 360);
-        p.distance = dist;
-        
-        snprintf(p.name, sizeof(p.name), "%s_%02d", p.isEnemy ? "Enemy" : "Ally", i + 1);
-        g_Players.push_back(p);
+        if (req.buffer && g_VMMDLL)
+        {
+            VMMDLL_MemReadEx(g_VMMDLL, g_DMA_PID, req.address, 
+                            (PBYTE)req.buffer, (DWORD)req.size, nullptr, 0);
+        }
     }
+#else
+    // Simulation - fills with zeros
+    for (auto& req : requests)
+    {
+        if (req.buffer)
+            memset(req.buffer, 0, req.size);
+    }
+#endif
+}
+
+void ScatterReader::Clear()
+{
+    requests.clear();
+}
+
+// ============================================================================
+// DMA ENGINE
+// ============================================================================
+bool DMAEngine::Initialize()
+{
+#if DMA_ENABLED
+    // Initialize FPGA connection
+    g_VMMDLL = VMMDLL_Initialize(3, (LPCSTR[]){"", "-device", "fpga"});
+    if (!g_VMMDLL)
+    {
+        // Try backup FPGA init
+        g_VMMDLL = VMMDLL_Initialize(3, (LPCSTR[]){"", "-device", "fpga://algo=0"});
+        if (!g_VMMDLL)
+        {
+            OutputDebugStringA("[ZERO] Failed to connect to FPGA device\n");
+            goto simulation_mode;
+        }
+    }
+    
+    OutputDebugStringA("[ZERO] FPGA Connected!\n");
+    
+    // Find target process
+    if (!VMMDLL_PidGetFromName(g_VMMDLL, (LPSTR)TARGET_PROCESS_NAME, &g_DMA_PID) || g_DMA_PID == 0)
+    {
+        OutputDebugStringA("[ZERO] Target process not found\n");
+        goto simulation_mode;
+    }
+    
+    // Get base address
+    s_BaseAddress = VMMDLL_ProcessGetModuleBase(g_VMMDLL, g_DMA_PID, (LPWSTR)L"cod.exe");
+    if (s_BaseAddress == 0)
+    {
+        OutputDebugStringA("[ZERO] Failed to get base address\n");
+        goto simulation_mode;
+    }
+    
+    s_ProcessId = g_DMA_PID;
+    s_Connected = true;
+    return true;
+    
+simulation_mode:
+    OutputDebugStringA("[ZERO] Running in simulation mode\n");
+#endif
+    
+    // Simulation mode
+    s_Connected = false;
+    s_BaseAddress = 0x140000000;  // Fake base
+    s_ProcessId = 12345;
+    return true;
+}
+
+void DMAEngine::Shutdown()
+{
+#if DMA_ENABLED
+    if (g_VMMDLL)
+    {
+        VMMDLL_Close(g_VMMDLL);
+        g_VMMDLL = nullptr;
+    }
+#endif
+    s_Connected = false;
+}
+
+bool DMAEngine::IsConnected()
+{
+    return s_Connected;
+}
+
+template<typename T>
+T DMAEngine::Read(uintptr_t address)
+{
+    T value = {};
+#if DMA_ENABLED
+    if (g_VMMDLL)
+    {
+        VMMDLL_MemReadEx(g_VMMDLL, g_DMA_PID, address, (PBYTE)&value, sizeof(T), nullptr, 0);
+    }
+#else
+    (void)address;
+#endif
+    return value;
+}
+
+bool DMAEngine::ReadBuffer(uintptr_t address, void* buffer, size_t size)
+{
+#if DMA_ENABLED
+    if (g_VMMDLL)
+    {
+        return VMMDLL_MemReadEx(g_VMMDLL, g_DMA_PID, address, (PBYTE)buffer, (DWORD)size, nullptr, 0);
+    }
+#else
+    (void)address; (void)buffer; (void)size;
+#endif
+    return false;
+}
+
+ScatterReader DMAEngine::CreateScatter()
+{
+    return ScatterReader();
+}
+
+uintptr_t DMAEngine::GetBaseAddress()
+{
+    return s_BaseAddress;
+}
+
+uint32_t DMAEngine::GetProcessId()
+{
+    return s_ProcessId;
+}
+
+// ============================================================================
+// PATTERN SCANNER
+// ============================================================================
+uintptr_t PatternScanner::Find(const char* module, const char* pattern, const char* mask)
+{
+    (void)module; (void)pattern; (void)mask;
+    
+#if DMA_ENABLED
+    // Real implementation would:
+    // 1. Read module memory
+    // 2. Scan for byte pattern
+    // 3. Return address of match
+    
+    // Example pseudo-code:
+    // uintptr_t moduleBase = DMAEngine::GetBaseAddress();
+    // size_t moduleSize = GetModuleSize(module);
+    // std::vector<uint8_t> buffer(moduleSize);
+    // DMAEngine::ReadBuffer(moduleBase, buffer.data(), moduleSize);
+    // 
+    // for (size_t i = 0; i < moduleSize - strlen(mask); i++)
+    // {
+    //     bool found = true;
+    //     for (size_t j = 0; mask[j]; j++)
+    //     {
+    //         if (mask[j] == 'x' && buffer[i+j] != (uint8_t)pattern[j])
+    //         {
+    //             found = false;
+    //             break;
+    //         }
+    //     }
+    //     if (found) return moduleBase + i;
+    // }
+#endif
+    
+    return 0;
+}
+
+bool PatternScanner::UpdateAllOffsets()
+{
+    // Example patterns (need real BO6 signatures)
+    // These would auto-update when game patches
+    
+    // Pattern patterns[] = {
+    //     { "ClientInfo", "\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74", "xxx????xxxx", 3 },
+    //     { "EntityList", "\x48\x8D\x0D\x00\x00\x00\x00\xE8\x00\x00\x00\x00\x48\x85\xC0", "xxx????x????xxx", 3 },
+    //     { "ViewMatrix", "\x48\x8D\x15\x00\x00\x00\x00\x48\x8B\xC8\xE8", "xxx????xxxx", 3 },
+    // };
+    
+    // for (auto& p : patterns)
+    // {
+    //     uintptr_t addr = Find("cod.exe", p.pattern, p.mask);
+    //     if (addr != 0)
+    //     {
+    //         // Read relative offset and calculate absolute
+    //         int32_t offset = DMAEngine::Read<int32_t>(addr + p.offset);
+    //         uintptr_t final = addr + p.offset + 4 + offset;
+    //         // Store in offset table
+    //     }
+    // }
     
     return true;
 }
 
-void ShutdownZeroDMA()
+// ============================================================================
+// PLAYER MANAGER
+// ============================================================================
+void PlayerManager::Update()
 {
-    g_Connected = false;
-    g_Players.clear();
-}
-
-bool IsConnected() { return g_Connected; }
-const std::vector<PlayerData>& GetPlayerList() { return g_Players; }
-Vec3 GetLocalPlayerPosition() { return g_LocalPos; }
-float GetLocalPlayerYaw() { return g_LocalYaw; }
-int GetLocalPlayerTeam() { return 1; }
-
-bool ReadMemory(ULONG64, void* buf, SIZE_T size) { memset(buf, 0, size); return true; }
-bool WriteMemory(ULONG64, void*, SIZE_T) { return true; }
-ULONG64 GetModuleBase(const char*) { return 0x140000000; }
-
-// Update simulation
-static void UpdateSim()
-{
-    static float t = 0.0f;
-    t += 0.016f;
+    static bool initialized = false;
+    static float simTime = 0;
     
-    ImGuiIO& io = ImGui::GetIO();
-    g_ScreenW = io.DisplaySize.x;
-    g_ScreenH = io.DisplaySize.y;
-    
-    for (size_t i = 0; i < g_Players.size(); i++)
+    if (!initialized)
     {
-        PlayerData& p = g_Players[i];
+        srand((unsigned)time(nullptr));
+        s_Players.clear();
         
-        float angle = t * 0.3f + (float)i * 0.5f;
-        float dist = 10.0f + sinf(t * 0.5f + (float)i) * 5.0f;
-        p.position.x = cosf(angle) * dist;
-        p.position.y = sinf(angle) * dist;
-        p.distance = dist;
-        p.yaw = angle * 57.3f;
-        
-        p.health = 30 + (int)(sinf(t * 0.2f + (float)i) * 35.0f + 35.0f);
-    }
-    
-    g_LocalYaw = fmodf(t * 15.0f, 360.0f);
-}
-
-// World to radar conversion
-static ImVec2 W2R(const Vec3& pos, float cx, float cy, float size, float zoom)
-{
-    float dx = pos.x - g_LocalPos.x;
-    float dy = pos.y - g_LocalPos.y;
-    
-    float rad = g_LocalYaw * PI / 180.0f;
-    float rx = dx * cosf(rad) - dy * sinf(rad);
-    float ry = dx * sinf(rad) + dy * cosf(rad);
-    
-    float scale = (size * 0.45f) / (30.0f / zoom);
-    rx *= scale;
-    ry *= scale;
-    
-    float maxR = size * 0.45f;
-    float len = sqrtf(rx * rx + ry * ry);
-    if (len > maxR) { rx = rx / len * maxR; ry = ry / len * maxR; }
-    
-    return ImVec2(cx + rx, cy - ry);
-}
-
-void RenderRadarOverlay()
-{
-    if (!g_Connected) return;
-    
-    UpdateSim();
-    
-    ImGuiIO& io = ImGui::GetIO();
-    
-    // Radar window
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - g_RadarSize - 30, 30), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(g_RadarSize + 20, g_RadarSize + 50), ImGuiCond_Always);
-    
-    ImGui::Begin("RADAR", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
-    
-    ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList* draw = ImGui::GetWindowDrawList();
-    
-    float size = g_RadarSize;
-    float cx = pos.x + size * 0.5f;
-    float cy = pos.y + size * 0.5f;
-    
-    // Background
-    draw->AddRectFilled(pos, ImVec2(pos.x + size, pos.y + size), IM_COL32(20, 20, 25, 255), 6.0f);
-    draw->AddRect(pos, ImVec2(pos.x + size, pos.y + size), IM_COL32(180, 50, 50, 255), 6.0f, 0, 2.0f);
-    
-    // Grid
-    ImU32 gridCol = IM_COL32(50, 50, 60, 200);
-    draw->AddLine(ImVec2(cx, pos.y + 5), ImVec2(cx, pos.y + size - 5), gridCol);
-    draw->AddLine(ImVec2(pos.x + 5, cy), ImVec2(pos.x + size - 5, cy), gridCol);
-    for (int i = 1; i <= 3; i++)
-    {
-        float r = (size * 0.45f) * (i / 3.0f);
-        draw->AddCircle(ImVec2(cx, cy), r, gridCol, 32);
-    }
-    
-    // Players
-    for (const auto& p : g_Players)
-    {
-        if (!p.valid) continue;
-        if (p.isEnemy && !g_ShowEnemies) continue;
-        if (!p.isEnemy && !g_ShowTeam) continue;
-        
-        ImVec2 rpos = W2R(p.position, cx, cy, size, g_RadarZoom);
-        
-        ImU32 col = p.isEnemy ? 
-            IM_COL32((int)(box_color[0]*255), (int)(box_color[1]*255), (int)(box_color[2]*255), 255) :
-            IM_COL32((int)(team_color[0]*255), (int)(team_color[1]*255), (int)(team_color[2]*255), 255);
-        
-        draw->AddCircleFilled(rpos, 5.0f, col);
-        
-        float yawRad = p.yaw * PI / 180.0f;
-        draw->AddLine(rpos, ImVec2(rpos.x + sinf(yawRad) * 10, rpos.y - cosf(yawRad) * 10), col, 2.0f);
-    }
-    
-    // Local player
-    draw->AddCircleFilled(ImVec2(cx, cy), 6.0f, IM_COL32(50, 255, 50, 255));
-    float viewRad = g_LocalYaw * PI / 180.0f;
-    draw->AddLine(ImVec2(cx, cy), ImVec2(cx + sinf(viewRad) * 15, cy - cosf(viewRad) * 15), IM_COL32(50, 255, 50, 255), 2.0f);
-    
-    // Move cursor past the radar
-    ImGui::Dummy(ImVec2(size, size));
-    
-    ImGui::Text("Players: %d", (int)g_Players.size());
-    
-    ImGui::End();
-    
-    // ESP Window (shows simulated ESP)
-    if (esp_enabled)
-    {
-        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 320, g_RadarSize + 100), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(300, 350), ImGuiCond_FirstUseEver);
-        
-        ImGui::Begin("ESP PREVIEW", nullptr, ImGuiWindowFlags_NoCollapse);
-        
-        ImVec2 espPos = ImGui::GetCursorScreenPos();
-        ImDrawList* espDraw = ImGui::GetWindowDrawList();
-        
-        // Draw some sample ESP boxes
-        for (int i = 0; i < 3; i++)
+        // Create simulated players
+        for (int i = 0; i < 12; i++)
         {
-            float x = espPos.x + 50 + i * 90;
-            float y = espPos.y + 50;
-            float h = 120.0f - i * 20;
-            float w = h * 0.4f;
+            PlayerData p = {};
+            p.valid = true;
+            p.isEnemy = (i < 6);
+            p.isAlive = true;
+            p.health = 30 + rand() % 70;
+            p.maxHealth = 100;
+            p.team = p.isEnemy ? 1 : 2;
+            sprintf_s(p.name, "%s_%d", p.isEnemy ? "Enemy" : "Team", i + 1);
             
-            bool isEnemy = (i < 2);
-            ImU32 col = isEnemy ? 
-                IM_COL32((int)(box_color[0]*255), (int)(box_color[1]*255), (int)(box_color[2]*255), 255) :
-                IM_COL32((int)(team_color[0]*255), (int)(team_color[1]*255), (int)(team_color[2]*255), 255);
+            float angle = (float)i * (6.28318f / 12.0f);
+            p.worldPos.x = cosf(angle) * (50.0f + rand() % 100);
+            p.worldPos.y = sinf(angle) * (50.0f + rand() % 100);
+            p.worldPos.z = 0;
+            p.yaw = (float)(rand() % 360);
+            p.distance = p.worldPos.Length();
             
-            // Box
-            if (g_ESP_Box)
+            s_Players.push_back(p);
+        }
+        
+        s_LocalPlayer = {};
+        s_LocalPlayer.valid = true;
+        s_LocalPlayer.isEnemy = false;
+        s_LocalPlayer.health = 100;
+        s_LocalPlayer.yaw = 0;
+        
+        initialized = true;
+    }
+    
+    // Update simulation
+    simTime += 0.016f;
+    
+#if DMA_ENABLED
+    if (DMAEngine::IsConnected())
+    {
+        // Real DMA read implementation would go here
+        // Using scatter reads for efficiency:
+        
+        ScatterReader scatter = DMAEngine::CreateScatter();
+        
+        // Read client info
+        uintptr_t clientInfo = DMAEngine::Read<uintptr_t>(
+            DMAEngine::GetBaseAddress() + BO6Offsets::ClientInfo);
+        
+        if (clientInfo)
+        {
+            uintptr_t clientBase = DMAEngine::Read<uintptr_t>(
+                clientInfo + BO6Offsets::ClientInfoBase);
+            
+            // Read local player data
+            scatter.AddRead(clientBase + BO6Offsets::EntityPos, 
+                           &s_LocalPlayer.worldPos, sizeof(Vec3));
+            scatter.AddRead(clientBase + BO6Offsets::EntityYaw,
+                           &s_LocalPlayer.yaw, sizeof(float));
+            
+            // Read entity list
+            uintptr_t entityList = DMAEngine::Read<uintptr_t>(
+                DMAEngine::GetBaseAddress() + BO6Offsets::EntityList);
+            
+            for (size_t i = 0; i < s_Players.size() && i < 150; i++)
             {
-                if (g_ESP_BoxType == 0)
-                {
-                    espDraw->AddRect(ImVec2(x - w/2, y), ImVec2(x + w/2, y + h), col, 0, 0, 2.0f);
-                }
-                else
-                {
-                    float c = w * 0.3f;
-                    // Corners
-                    espDraw->AddLine(ImVec2(x - w/2, y), ImVec2(x - w/2 + c, y), col, 2.0f);
-                    espDraw->AddLine(ImVec2(x - w/2, y), ImVec2(x - w/2, y + c), col, 2.0f);
-                    espDraw->AddLine(ImVec2(x + w/2, y), ImVec2(x + w/2 - c, y), col, 2.0f);
-                    espDraw->AddLine(ImVec2(x + w/2, y), ImVec2(x + w/2, y + c), col, 2.0f);
-                    espDraw->AddLine(ImVec2(x - w/2, y + h), ImVec2(x - w/2 + c, y + h), col, 2.0f);
-                    espDraw->AddLine(ImVec2(x - w/2, y + h), ImVec2(x - w/2, y + h - c), col, 2.0f);
-                    espDraw->AddLine(ImVec2(x + w/2, y + h), ImVec2(x + w/2 - c, y + h), col, 2.0f);
-                    espDraw->AddLine(ImVec2(x + w/2, y + h), ImVec2(x + w/2, y + h - c), col, 2.0f);
-                }
-            }
-            
-            // Skeleton
-            if (g_ESP_Skeleton)
-            {
-                float headY = y + h * 0.05f;
-                float neckY = y + h * 0.12f;
-                float chestY = y + h * 0.25f;
-                float pelvisY = y + h * 0.5f;
-                float footY = y + h;
-                float armW = w * 0.6f;
+                uintptr_t entity = entityList + i * 0x568;  // Entity stride
                 
-                espDraw->AddCircle(ImVec2(x, headY), 6, col, 12, 2.0f);
-                espDraw->AddLine(ImVec2(x, headY + 6), ImVec2(x, pelvisY), col, 2.0f);
-                espDraw->AddLine(ImVec2(x, neckY), ImVec2(x - armW, chestY + 20), col, 2.0f);
-                espDraw->AddLine(ImVec2(x, neckY), ImVec2(x + armW, chestY + 20), col, 2.0f);
-                espDraw->AddLine(ImVec2(x, pelvisY), ImVec2(x - w * 0.3f, footY), col, 2.0f);
-                espDraw->AddLine(ImVec2(x, pelvisY), ImVec2(x + w * 0.3f, footY), col, 2.0f);
+                scatter.AddRead(entity + BO6Offsets::EntityPos,
+                               &s_Players[i].worldPos, sizeof(Vec3));
+                scatter.AddRead(entity + BO6Offsets::EntityHealth,
+                               &s_Players[i].health, sizeof(int));
+                scatter.AddRead(entity + BO6Offsets::EntityYaw,
+                               &s_Players[i].yaw, sizeof(float));
+                scatter.AddRead(entity + BO6Offsets::EntityTeam,
+                               &s_Players[i].team, sizeof(int));
             }
             
-            // Health bar
-            if (g_ESP_Health)
-            {
-                int hp = 70 - i * 20;
-                float hpPct = hp / 100.0f;
-                float barH = h * hpPct;
-                int r = (int)(255 * (1.0f - hpPct));
-                int g = (int)(255 * hpPct);
-                
-                espDraw->AddRectFilled(ImVec2(x - w/2 - 7, y), ImVec2(x - w/2 - 3, y + h), IM_COL32(0, 0, 0, 200));
-                espDraw->AddRectFilled(ImVec2(x - w/2 - 6, y + h - barH), ImVec2(x - w/2 - 4, y + h), IM_COL32(r, g, 0, 255));
-            }
+            // Execute all reads at once
+            scatter.Execute();
             
-            // Name
-            if (g_ESP_Name)
+            // Post-process
+            for (auto& p : s_Players)
             {
-                char name[16];
-                snprintf(name, sizeof(name), "%s_%d", isEnemy ? "Enemy" : "Team", i + 1);
-                espDraw->AddText(ImVec2(x - 25, y - 15), IM_COL32(255, 255, 255, 255), name);
-            }
-            
-            // Distance
-            if (g_ESP_Distance)
-            {
-                char dist[16];
-                snprintf(dist, sizeof(dist), "%dm", 20 + i * 15);
-                espDraw->AddText(ImVec2(x - 10, y + h + 3), IM_COL32(200, 200, 200, 255), dist);
-            }
-            
-            // Head circle
-            if (g_ESP_HeadCircle)
-            {
-                espDraw->AddCircleFilled(ImVec2(x, y + h * 0.05f), 4, col);
+                p.distance = (p.worldPos - s_LocalPlayer.worldPos).Length();
+                p.isEnemy = (p.team != s_LocalPlayer.team);
+                p.isAlive = (p.health > 0);
+                p.valid = p.isAlive;
             }
         }
         
-        ImGui::Dummy(ImVec2(280, 200));
-        ImGui::Text("ESP Preview - Toggle options in ESP tab");
+        return;
+    }
+#endif
+    
+    // Simulation mode - animate players
+    s_LocalPlayer.yaw = fmodf(simTime * 20.0f, 360.0f);
+    
+    for (size_t i = 0; i < s_Players.size(); i++)
+    {
+        PlayerData& p = s_Players[i];
         
-        ImGui::End();
+        float angle = simTime * 0.3f + (float)i * 0.5f;
+        float dist = 50.0f + sinf(simTime + i) * 30.0f;
+        
+        p.worldPos.x = cosf(angle) * dist;
+        p.worldPos.y = sinf(angle) * dist;
+        p.distance = dist;
+        p.yaw = fmodf(angle * 57.3f, 360.0f);
+        p.health = 30 + (int)(sinf(simTime * 0.5f + i) * 35 + 35);
+        p.isAlive = (p.health > 0);
     }
 }
+
+std::vector<PlayerData>& PlayerManager::GetPlayers()
+{
+    return s_Players;
+}
+
+PlayerData& PlayerManager::GetLocalPlayer()
+{
+    return s_LocalPlayer;
+}
+
+int PlayerManager::GetPlayerCount()
+{
+    int count = 0;
+    for (const auto& p : s_Players)
+    {
+        if (p.valid && p.isAlive)
+            count++;
+    }
+    return count;
+}
+
+// Explicit template instantiations
+template int DMAEngine::Read<int>(uintptr_t);
+template float DMAEngine::Read<float>(uintptr_t);
+template uintptr_t DMAEngine::Read<uintptr_t>(uintptr_t);
+template uint64_t DMAEngine::Read<uint64_t>(uintptr_t);
+template uint32_t DMAEngine::Read<uint32_t>(uintptr_t);

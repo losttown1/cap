@@ -3,78 +3,32 @@
   <ItemGroup>
     <Filter Include="Source Files">
       <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
-      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+      <Extensions>cpp;c;cc;cxx</Extensions>
     </Filter>
     <Filter Include="Header Files">
       <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
-    </Filter>
-    <Filter Include="Source Files\ImGui">
-      <UniqueIdentifier>{3A8D0C9F-4E5B-6D7A-8B9C-0E1F2D3A4B5C}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Source Files\ZeroElite">
-      <UniqueIdentifier>{5B9E1D2F-6C7A-8D9B-0E1F-3A4B5C6D7E8F}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Header Files\ImGui">
-      <UniqueIdentifier>{7C0D1E3F-8A9B-0C1D-2E3F-4A5B6C7D8E9F}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Header Files\ZeroElite">
-      <UniqueIdentifier>{9E1F2A3B-0C1D-2E3F-4A5B-6C7D8E9F0A1B}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx</Extensions>
     </Filter>
   </ItemGroup>
+  
   <ItemGroup>
     <ClCompile Include="src\ZeroMain.cpp">
-      <Filter>Source Files\ZeroElite</Filter>
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\ZeroUI.cpp">
-      <Filter>Source Files\ZeroElite</Filter>
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\DMA_Engine.cpp">
-      <Filter>Source Files\ZeroElite</Filter>
-    </ClCompile>
-    <ClCompile Include="src\imgui.cpp">
-      <Filter>Source Files\ImGui</Filter>
-    </ClCompile>
-    <ClCompile Include="src\imgui_draw.cpp">
-      <Filter>Source Files\ImGui</Filter>
-    </ClCompile>
-    <ClCompile Include="src\imgui_tables.cpp">
-      <Filter>Source Files\ImGui</Filter>
-    </ClCompile>
-    <ClCompile Include="src\imgui_widgets.cpp">
-      <Filter>Source Files\ImGui</Filter>
-    </ClCompile>
-    <ClCompile Include="src\imgui_impl_dx11.cpp">
-      <Filter>Source Files\ImGui</Filter>
-    </ClCompile>
-    <ClCompile Include="src\imgui_impl_win32.cpp">
-      <Filter>Source Files\ImGui</Filter>
+      <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
+  
   <ItemGroup>
-    <ClInclude Include="include\imconfig.h">
-      <Filter>Header Files\ImGui</Filter>
-    </ClInclude>
-    <ClInclude Include="include\imgui.h">
-      <Filter>Header Files\ImGui</Filter>
-    </ClInclude>
-    <ClInclude Include="include\imgui_internal.h">
-      <Filter>Header Files\ImGui</Filter>
-    </ClInclude>
-    <ClInclude Include="include\imgui_impl_dx11.h">
-      <Filter>Header Files\ImGui</Filter>
-    </ClInclude>
-    <ClInclude Include="include\imgui_impl_win32.h">
-      <Filter>Header Files\ImGui</Filter>
-    </ClInclude>
-    <ClInclude Include="include\vmmdll.h">
-      <Filter>Header Files\ZeroElite</Filter>
-    </ClInclude>
     <ClInclude Include="src\ZeroUI.hpp">
-      <Filter>Header Files\ZeroElite</Filter>
+      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\DMA_Engine.hpp">
-      <Filter>Header Files\ZeroElite</Filter>
+      <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

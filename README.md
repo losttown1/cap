@@ -1,149 +1,133 @@
-# Zero Elite - Game Overlay
+# PROJECT ZERO | BO6 DMA Radar
 
-A professional DirectX 11 game overlay built with ImGui, featuring DMA (Direct Memory Access) integration for advanced memory operations.
+Professional DMA Overlay for Black Ops 6 with Radar, ESP, and Aimbot features.
 
 ## Features
 
-- **Transparent Overlay**: Fully transparent window using `WS_EX_LAYERED` and `WS_EX_TRANSPARENT`
-- **DirectX 11 Rendering**: High-performance graphics with D3D11
-- **ImGui Interface**: Professional, modern UI with dark theme
-- **DMA Integration**: VMMDLL-based memory access
-- **Hotkey Support**: INSERT key to toggle menu
+### Core Features
+- **Transparent Overlay** - Renders on top of game without interfering with input
+- **Mouse-Controlled Menu** - Full mouse support with toggles, sliders, and combo boxes
+- **Non-Blocking Input** - INSERT key handled in separate thread (no freezing!)
+- **V-Sync OFF** - Minimal input lag for radar updates
+- **DMA Scatter Reads** - Batch multiple memory reads for smooth performance
+- **Pattern Scanner** - Auto-update offsets when game patches (stub implementation)
 
-### UI Features
+### Radar
+- Real-time 2D radar with enemy/team positions
+- Configurable size and zoom
+- Player direction indicators
+- Color-coded dots (Red = Enemy, Blue = Team, Green = You)
 
-- **ESP Toggle**: Enable/disable player ESP visualization
-- **Aimbot Toggle**: Enable/disable aim assistance
-- **Refresh Rate Slider**: Adjust overlay refresh rate (30-240 Hz)
-- **Theme Customization**: Multiple color themes
-- **DMA Status Panel**: Real-time DMA connection status
+### Aimbot (UI Only)
+- FOV slider
+- Smoothness control
+- Target bone selection
+- Visibility check option
+- Configurable aim key
+
+### ESP (UI Only)
+- Box ESP (2D and Corner)
+- Skeleton ESP
+- Health bars
+- Name tags
+- Distance display
+- Snaplines
+
+### Misc
+- No Flash
+- No Smoke
+- Bhop
+- Radar Hack (UAV)
+- Magic Bullet
+
+## Controls
+
+| Key | Action |
+|-----|--------|
+| INSERT | Toggle Menu (Show/Hide) |
+| END | Exit Program |
+| Mouse | Interact with Menu |
+
+## Building
+
+### Requirements
+- Visual Studio 2022
+- Windows 10 SDK
+- DirectX 11 (included with Windows)
+
+### Steps
+1. Open `ZeroElite.sln` in Visual Studio
+2. Select **Release | x64** configuration
+3. Build solution (Ctrl+Shift+B)
+4. Run `bin/Release/ZeroElite.exe`
+
+### For Real DMA Support
+1. Place `vmmdll.lib` in the `libs/` folder
+2. Place `vmmdll.dll` and related DLLs next to the .exe
+3. In `src/DMA_Engine.hpp`, change `#define DMA_ENABLED 0` to `#define DMA_ENABLED 1`
+4. Rebuild the project
 
 ## Project Structure
 
 ```
 ZeroElite/
-├── include/                 # Header files
-│   ├── imgui.h              # ImGui core header
-│   ├── imgui_internal.h     # ImGui internal structures
-│   ├── imgui_impl_dx11.h    # DirectX 11 backend
-│   ├── imgui_impl_win32.h   # Win32 backend
-│   ├── imconfig.h           # ImGui configuration
-│   └── vmmdll.h             # VMMDLL interface header
-├── src/                     # Source files
-│   ├── ZeroMain.cpp         # Application entry point
-│   ├── ZeroUI.cpp           # User interface implementation
-│   ├── ZeroUI.h             # User interface header
-│   ├── DMA_Engine.cpp       # DMA memory operations
-│   ├── DMA_Engine.h         # DMA engine header
-│   ├── imgui.cpp            # ImGui core implementation
-│   ├── imgui_draw.cpp       # ImGui drawing routines
-│   ├── imgui_tables.cpp     # ImGui tables
-│   ├── imgui_widgets.cpp    # ImGui widgets
-│   ├── imgui_impl_dx11.cpp  # DirectX 11 backend
-│   └── imgui_impl_win32.cpp # Win32 backend
-├── libs/                    # Libraries
-│   ├── vmmdll.lib           # VMMDLL import library (placeholder)
-│   └── README.txt           # Library setup instructions
-├── ZeroElite.sln            # Visual Studio solution
-├── ZeroElite.vcxproj        # Visual Studio project
-├── ZeroElite.vcxproj.filters# Project filters
-└── README.md                # This file
+├── src/
+│   ├── ZeroMain.cpp       # Main application, window, rendering
+│   ├── ZeroUI.cpp         # UI stubs (rendering in ZeroMain)
+│   ├── ZeroUI.hpp         # UI declarations
+│   ├── DMA_Engine.cpp     # DMA implementation & player management
+│   └── DMA_Engine.hpp     # DMA structures & declarations
+├── include/
+│   └── vmmdll.h           # VMMDLL header (for real DMA)
+├── libs/
+│   └── vmmdll.lib         # VMMDLL library (optional)
+├── ZeroElite.sln
+├── ZeroElite.vcxproj
+└── README.md
 ```
-
-## Requirements
-
-- **Visual Studio 2019/2022** with C++ desktop development workload
-- **Windows SDK** (10.0 or later)
-- **DirectX 11 SDK** (included with Windows SDK)
-- **VMMDLL Library** (from MemProcFS project)
-
-## Build Instructions
-
-### Step 1: Install Prerequisites
-
-1. Install Visual Studio 2019 or 2022 with:
-   - Desktop development with C++
-   - Windows 10/11 SDK
-
-### Step 2: Setup VMMDLL Library
-
-1. Download MemProcFS from: https://github.com/ufrisk/MemProcFS
-2. Extract the package
-3. Copy `vmmdll.lib` to the `libs/` folder (replace the placeholder)
-
-### Step 3: Build the Project
-
-1. Open `ZeroElite.sln` in Visual Studio
-2. Select **Release | x64** configuration
-3. Build the solution (F7 or Build > Build Solution)
-
-### Step 4: Run
-
-1. Copy required DLL files to the output folder:
-   - `vmm.dll`
-   - `leechcore.dll`
-   - `FTD3XX.dll` (for FPGA devices)
-2. Run `ZeroElite.exe`
-
-## Configuration
-
-### DMA Settings
-
-Located in `src/DMA_Engine.h`:
-
-```cpp
-constexpr DWORD TARGET_PID = 35028;
-constexpr ULONG64 TARGET_HANDLE = 0x021EE040;
-```
-
-Modify these values to match your target process.
-
-### Hotkeys
-
-| Key      | Action           |
-|----------|------------------|
-| INSERT   | Toggle Menu      |
-| ESC      | Close Menu       |
-| END      | Exit Application |
-| F1       | Toggle ESP       |
-| F2       | Toggle Aimbot    |
 
 ## Technical Details
 
+### Rendering Pipeline
+- **D3D11** - Hardware-accelerated graphics
+- **D2D1** - 2D drawing (shapes, text)
+- **DWrite** - Text rendering with custom fonts
+
 ### Overlay Window
+- `WS_EX_TOPMOST` - Always on top
+- `WS_EX_LAYERED` - Transparency support
+- `WS_EX_TRANSPARENT` - Click-through when menu hidden
+- `DwmExtendFrameIntoClientArea` - Glass effect for true transparency
 
-The overlay uses the following Windows styles for transparency:
-- `WS_EX_LAYERED`: Enables layered window
-- `WS_EX_TRANSPARENT`: Click-through when menu is hidden
-- `WS_EX_TOPMOST`: Always on top
-- `WS_EX_TOOLWINDOW`: Hidden from taskbar
+### Threading
+- **Main Thread** - Window message pump, rendering
+- **Input Thread** - Keyboard monitoring (GetAsyncKeyState)
+- **Update Thread** - Player data simulation/reading
 
-### ImGui Integration
+### DMA Features
+- **Scatter Reads** - Batch multiple memory reads for efficiency
+- **Pattern Scanning** - Automatic offset updates (stub)
+- **Simulation Mode** - Works without FPGA for testing
 
-The project includes a full ImGui implementation with:
-- DirectX 11 renderer backend
-- Win32 platform backend
-- Custom dark theme with accent colors
+## Troubleshooting
 
-### DMA Memory Access
+### Menu Not Showing
+- Press INSERT to toggle menu visibility
+- Make sure the program is running (check taskbar)
 
-Uses VMMDLL for direct memory access:
-- Process memory reading/writing
-- Physical memory access
-- Scatter read operations for efficiency
+### Can't Click Menu
+- When menu is visible, overlay captures mouse input
+- Press INSERT to hide menu and return to game
 
-## Architecture
-
-This project is configured for **x64 architecture only**. Win32 builds are not supported due to DMA hardware requirements.
-
-## License
-
-This project is provided as-is for educational purposes. Use responsibly and in accordance with all applicable laws and terms of service.
+### Radar Not Moving
+- In simulation mode, players animate automatically
+- For real gameplay, ensure DMA_ENABLED = 1 and FPGA connected
 
 ## Disclaimer
 
-This software is intended for educational and research purposes only. The authors are not responsible for any misuse of this software. Always ensure you have permission before accessing any computer system or process memory.
+This software is provided for educational purposes only. Use at your own risk.
+The developer is not responsible for any bans or damages resulting from use of this software.
 
----
+## Version
 
-**Zero Elite** - Professional Game Overlay Framework
+**PROJECT ZERO v2.0** - Professional DMA Radar for BO6

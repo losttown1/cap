@@ -1,6 +1,5 @@
-// PROJECT ZERO - Professional DMA Engine & ESP System
-// Full ESP: Box, Skeleton, Health, Names, Distance
-// Radar + 3D ESP like professional market tools
+// PROJECT ZERO - DMA Engine & Radar
+// Simplified reliable implementation
 
 #include "DMA_Engine.hpp"
 #include "ZeroUI.hpp"
@@ -11,44 +10,16 @@
 #include <cstdlib>
 #include <vector>
 
-#define DMA_ENABLED 0
-#define PI 3.14159265358979323846f
+#define PI 3.14159265f
 
-#if DMA_ENABLED
-#include "../include/vmmdll.h"
-#pragma comment(lib, "../libs/vmmdll.lib")
-static VMM_HANDLE g_VMM = nullptr;
-#endif
-
-// ============================================================================
-// State
-// ============================================================================
-static bool g_Connected = false;
-static DWORD g_PID = 0;
-static ULONG64 g_Base = 0;
-static std::vector<PlayerData> g_Players;
-
-static Vec3 g_LocalPos(0, 0, 0);
-static float g_LocalYaw = 0.0f;
-static float g_LocalPitch = 0.0f;
-
-// Screen dimensions
-static float g_ScreenW = 2560.0f;
-static float g_ScreenH = 1440.0f;
-
-// ============================================================================
-// External settings from ZeroUI
-// ============================================================================
+// External settings
 extern float g_RadarSize;
 extern float g_RadarZoom;
-extern float g_RadarX;
-extern float g_RadarY;
 extern bool g_ShowEnemies;
 extern bool g_ShowTeam;
-extern bool g_ShowDistance;
 extern float box_color[4];
+extern float team_color[4];
 
-// ESP Settings
 extern bool g_ESP_Box;
 extern bool g_ESP_Skeleton;
 extern bool g_ESP_Health;
@@ -58,93 +29,39 @@ extern bool g_ESP_HeadCircle;
 extern bool g_ESP_Snapline;
 extern int g_ESP_BoxType;
 
-// Misc Settings
-extern bool g_Triggerbot;
-extern bool g_NoFlash;
-extern bool g_NoSmoke;
-extern bool g_RadarHack;
-extern bool g_Bhop;
-extern bool g_MagicBullet;
+// State
+static bool g_Connected = false;
+static std::vector<PlayerData> g_Players;
+static Vec3 g_LocalPos(0, 0, 0);
+static float g_LocalYaw = 0.0f;
+static float g_ScreenW = 1280.0f;
+static float g_ScreenH = 720.0f;
 
-// ============================================================================
-// Bone structure for skeleton
-// ============================================================================
-struct BonePos {
-    Vec3 head;
-    Vec3 neck;
-    Vec3 chest;
-    Vec3 spine;
-    Vec3 pelvis;
-    Vec3 leftShoulder;
-    Vec3 rightShoulder;
-    Vec3 leftElbow;
-    Vec3 rightElbow;
-    Vec3 leftHand;
-    Vec3 rightHand;
-    Vec3 leftHip;
-    Vec3 rightHip;
-    Vec3 leftKnee;
-    Vec3 rightKnee;
-    Vec3 leftFoot;
-    Vec3 rightFoot;
-};
-
-// ============================================================================
-// Initialization
-// ============================================================================
 bool InitializeZeroDMA()
 {
-    if (g_Connected) return true;
-
-#if DMA_ENABLED
-    LPCSTR args[] = { "", "-device", "fpga" };
-    g_VMM = VMMDLL_Initialize(3, (LPSTR*)args);
-    if (!g_VMM) goto simulation;
-    
-    DWORD pid = 0;
-    if (VMMDLL_PidGetFromName(g_VMM, (LPSTR)TARGET_PROCESS_NAME, &pid)) {
-        g_PID = pid;
-        g_Connected = true;
-        return true;
-    }
-simulation:
-#endif
-
     g_Connected = true;
-    g_PID = 1234;
-    g_Base = 0x140000000;
     
+    // Create test players
     srand((unsigned)time(nullptr));
     g_Players.clear();
     
-    // Create test players with full data
     for (int i = 0; i < 12; i++)
     {
         PlayerData p = {};
         p.valid = true;
         p.isEnemy = (i < 6);
-        p.health = 20 + (rand() % 80);
+        p.health = 20 + rand() % 80;
         p.maxHealth = 100;
         p.team = p.isEnemy ? 2 : 1;
         p.isVisible = (rand() % 2) == 0;
         
-        // Random position around player
         float angle = (float)i * (2.0f * PI / 12.0f);
-        float dist = 5.0f + (float)(rand() % 30);
+        float dist = 10.0f + (float)(rand() % 30);
         p.position = Vec3(cosf(angle) * dist, sinf(angle) * dist, 0);
         p.yaw = (float)(rand() % 360);
         p.distance = dist;
         
         snprintf(p.name, sizeof(p.name), "%s_%02d", p.isEnemy ? "Enemy" : "Ally", i + 1);
-        
-        // Screen position (simulated WorldToScreen)
-        p.screenPos = Vec2(
-            g_ScreenW * 0.3f + (float)(rand() % (int)(g_ScreenW * 0.4f)),
-            g_ScreenH * 0.2f + (float)(rand() % (int)(g_ScreenH * 0.5f))
-        );
-        p.screenHeight = 80.0f + (float)(rand() % 120);
-        p.onScreen = true;
-        
         g_Players.push_back(p);
     }
     
@@ -153,9 +70,6 @@ simulation:
 
 void ShutdownZeroDMA()
 {
-#if DMA_ENABLED
-    if (g_VMM) { VMMDLL_Close(g_VMM); g_VMM = nullptr; }
-#endif
     g_Connected = false;
     g_Players.clear();
 }
@@ -166,27 +80,12 @@ Vec3 GetLocalPlayerPosition() { return g_LocalPos; }
 float GetLocalPlayerYaw() { return g_LocalYaw; }
 int GetLocalPlayerTeam() { return 1; }
 
-bool ReadMemory(ULONG64 addr, void* buf, SIZE_T size) {
-#if DMA_ENABLED
-    if (g_VMM) return VMMDLL_MemRead(g_VMM, g_PID, addr, (PBYTE)buf, (DWORD)size);
-#endif
-    memset(buf, 0, size);
-    return true;
-}
+bool ReadMemory(ULONG64, void* buf, SIZE_T size) { memset(buf, 0, size); return true; }
+bool WriteMemory(ULONG64, void*, SIZE_T) { return true; }
+ULONG64 GetModuleBase(const char*) { return 0x140000000; }
 
-bool WriteMemory(ULONG64 addr, void* buf, SIZE_T size) {
-#if DMA_ENABLED
-    if (g_VMM) return VMMDLL_MemWrite(g_VMM, g_PID, addr, (PBYTE)buf, (DWORD)size);
-#endif
-    return true;
-}
-
-ULONG64 GetModuleBase(const char*) { return g_Base; }
-
-// ============================================================================
-// Simulation Update
-// ============================================================================
-static void UpdateSimulation()
+// Update simulation
+static void UpdateSim()
 {
     static float t = 0.0f;
     t += 0.016f;
@@ -199,238 +98,26 @@ static void UpdateSimulation()
     {
         PlayerData& p = g_Players[i];
         
-        // Animate world position
         float angle = t * 0.3f + (float)i * 0.5f;
-        float dist = 10.0f + sinf(t * 0.5f + i) * 5.0f;
+        float dist = 10.0f + sinf(t * 0.5f + (float)i) * 5.0f;
         p.position.x = cosf(angle) * dist;
         p.position.y = sinf(angle) * dist;
         p.distance = dist;
         p.yaw = angle * 57.3f;
         
-        // Simulate screen position (moving around screen)
-        float sx = g_ScreenW * 0.5f + cosf(t * 0.5f + i * 0.8f) * (g_ScreenW * 0.35f);
-        float sy = g_ScreenH * 0.3f + sinf(t * 0.3f + i * 0.6f) * (g_ScreenH * 0.25f);
-        
-        p.screenPos = Vec2(sx, sy);
-        p.screenHeight = 100.0f + sinf(t + i) * 50.0f;
-        p.onScreen = (sx > 50 && sx < g_ScreenW - 50 && sy > 50 && sy < g_ScreenH - 100);
-        
-        // Vary health
-        p.health = 30 + (int)(sinf(t * 0.2f + i) * 35.0f + 35.0f);
+        p.health = 30 + (int)(sinf(t * 0.2f + (float)i) * 35.0f + 35.0f);
     }
     
     g_LocalYaw = fmodf(t * 15.0f, 360.0f);
 }
 
-// ============================================================================
-// Helper: Get bone screen positions (simulated)
-// ============================================================================
-static BonePos GetBoneScreenPositions(const PlayerData& p)
+// World to radar conversion
+static ImVec2 W2R(const Vec3& pos, float cx, float cy, float size, float zoom)
 {
-    BonePos b;
-    float h = p.screenHeight;
-    float x = p.screenPos.x;
-    float y = p.screenPos.y;
-    float w = h * 0.3f;
+    float dx = pos.x - g_LocalPos.x;
+    float dy = pos.y - g_LocalPos.y;
     
-    // Head to feet positions
-    b.head = Vec3(x, y - h * 0.45f, 0);
-    b.neck = Vec3(x, y - h * 0.38f, 0);
-    b.chest = Vec3(x, y - h * 0.25f, 0);
-    b.spine = Vec3(x, y - h * 0.1f, 0);
-    b.pelvis = Vec3(x, y, 0);
-    
-    // Arms
-    b.leftShoulder = Vec3(x - w * 0.5f, y - h * 0.32f, 0);
-    b.rightShoulder = Vec3(x + w * 0.5f, y - h * 0.32f, 0);
-    b.leftElbow = Vec3(x - w * 0.7f, y - h * 0.15f, 0);
-    b.rightElbow = Vec3(x + w * 0.7f, y - h * 0.15f, 0);
-    b.leftHand = Vec3(x - w * 0.6f, y + h * 0.05f, 0);
-    b.rightHand = Vec3(x + w * 0.6f, y + h * 0.05f, 0);
-    
-    // Legs
-    b.leftHip = Vec3(x - w * 0.2f, y + h * 0.02f, 0);
-    b.rightHip = Vec3(x + w * 0.2f, y + h * 0.02f, 0);
-    b.leftKnee = Vec3(x - w * 0.25f, y + h * 0.28f, 0);
-    b.rightKnee = Vec3(x + w * 0.25f, y + h * 0.28f, 0);
-    b.leftFoot = Vec3(x - w * 0.3f, y + h * 0.5f, 0);
-    b.rightFoot = Vec3(x + w * 0.3f, y + h * 0.5f, 0);
-    
-    return b;
-}
-
-// ============================================================================
-// Draw ESP Box
-// ============================================================================
-static void DrawBox2D(ImDrawList* draw, float x, float y, float w, float h, ImU32 col)
-{
-    draw->AddRect(ImVec2(x - w/2, y - h/2), ImVec2(x + w/2, y + h/2), col, 0, 0, 2.0f);
-}
-
-static void DrawBoxCorner(ImDrawList* draw, float x, float y, float w, float h, ImU32 col)
-{
-    float cornerLen = w * 0.25f;
-    float left = x - w/2, right = x + w/2;
-    float top = y - h/2, bottom = y + h/2;
-    
-    // Top left
-    draw->AddLine(ImVec2(left, top), ImVec2(left + cornerLen, top), col, 2.0f);
-    draw->AddLine(ImVec2(left, top), ImVec2(left, top + cornerLen), col, 2.0f);
-    // Top right
-    draw->AddLine(ImVec2(right, top), ImVec2(right - cornerLen, top), col, 2.0f);
-    draw->AddLine(ImVec2(right, top), ImVec2(right, top + cornerLen), col, 2.0f);
-    // Bottom left
-    draw->AddLine(ImVec2(left, bottom), ImVec2(left + cornerLen, bottom), col, 2.0f);
-    draw->AddLine(ImVec2(left, bottom), ImVec2(left, bottom - cornerLen), col, 2.0f);
-    // Bottom right
-    draw->AddLine(ImVec2(right, bottom), ImVec2(right - cornerLen, bottom), col, 2.0f);
-    draw->AddLine(ImVec2(right, bottom), ImVec2(right, bottom - cornerLen), col, 2.0f);
-}
-
-// ============================================================================
-// Draw Skeleton
-// ============================================================================
-static void DrawSkeleton(ImDrawList* draw, const BonePos& b, ImU32 col)
-{
-    // Head
-    draw->AddCircle(ImVec2(b.head.x, b.head.y), 8.0f, col, 12, 2.0f);
-    
-    // Spine
-    draw->AddLine(ImVec2(b.head.x, b.head.y + 8), ImVec2(b.neck.x, b.neck.y), col, 2.0f);
-    draw->AddLine(ImVec2(b.neck.x, b.neck.y), ImVec2(b.chest.x, b.chest.y), col, 2.0f);
-    draw->AddLine(ImVec2(b.chest.x, b.chest.y), ImVec2(b.spine.x, b.spine.y), col, 2.0f);
-    draw->AddLine(ImVec2(b.spine.x, b.spine.y), ImVec2(b.pelvis.x, b.pelvis.y), col, 2.0f);
-    
-    // Arms
-    draw->AddLine(ImVec2(b.neck.x, b.neck.y), ImVec2(b.leftShoulder.x, b.leftShoulder.y), col, 2.0f);
-    draw->AddLine(ImVec2(b.neck.x, b.neck.y), ImVec2(b.rightShoulder.x, b.rightShoulder.y), col, 2.0f);
-    draw->AddLine(ImVec2(b.leftShoulder.x, b.leftShoulder.y), ImVec2(b.leftElbow.x, b.leftElbow.y), col, 2.0f);
-    draw->AddLine(ImVec2(b.rightShoulder.x, b.rightShoulder.y), ImVec2(b.rightElbow.x, b.rightElbow.y), col, 2.0f);
-    draw->AddLine(ImVec2(b.leftElbow.x, b.leftElbow.y), ImVec2(b.leftHand.x, b.leftHand.y), col, 2.0f);
-    draw->AddLine(ImVec2(b.rightElbow.x, b.rightElbow.y), ImVec2(b.rightHand.x, b.rightHand.y), col, 2.0f);
-    
-    // Legs
-    draw->AddLine(ImVec2(b.pelvis.x, b.pelvis.y), ImVec2(b.leftHip.x, b.leftHip.y), col, 2.0f);
-    draw->AddLine(ImVec2(b.pelvis.x, b.pelvis.y), ImVec2(b.rightHip.x, b.rightHip.y), col, 2.0f);
-    draw->AddLine(ImVec2(b.leftHip.x, b.leftHip.y), ImVec2(b.leftKnee.x, b.leftKnee.y), col, 2.0f);
-    draw->AddLine(ImVec2(b.rightHip.x, b.rightHip.y), ImVec2(b.rightKnee.x, b.rightKnee.y), col, 2.0f);
-    draw->AddLine(ImVec2(b.leftKnee.x, b.leftKnee.y), ImVec2(b.leftFoot.x, b.leftFoot.y), col, 2.0f);
-    draw->AddLine(ImVec2(b.rightKnee.x, b.rightKnee.y), ImVec2(b.rightFoot.x, b.rightFoot.y), col, 2.0f);
-}
-
-// ============================================================================
-// Draw Health Bar
-// ============================================================================
-static void DrawHealthBar(ImDrawList* draw, float x, float y, float w, float h, int health, int maxHealth)
-{
-    float barW = 4.0f;
-    float barH = h;
-    float barX = x - w/2 - barW - 3.0f;
-    float barY = y - h/2;
-    
-    float healthPercent = (float)health / (float)maxHealth;
-    float filledH = barH * healthPercent;
-    
-    // Background
-    draw->AddRectFilled(ImVec2(barX, barY), ImVec2(barX + barW, barY + barH), IM_COL32(0, 0, 0, 180));
-    
-    // Health fill (green to red gradient based on health)
-    int r = (int)(255 * (1.0f - healthPercent));
-    int g = (int)(255 * healthPercent);
-    ImU32 healthCol = IM_COL32(r, g, 0, 255);
-    
-    draw->AddRectFilled(ImVec2(barX, barY + barH - filledH), ImVec2(barX + barW, barY + barH), healthCol);
-    
-    // Border
-    draw->AddRect(ImVec2(barX, barY), ImVec2(barX + barW, barY + barH), IM_COL32(0, 0, 0, 255));
-}
-
-// ============================================================================
-// Render 3D ESP
-// ============================================================================
-void RenderESP()
-{
-    if (!g_Connected) return;
-    
-    ImDrawList* draw = ImGui::GetBackgroundDrawList();
-    if (!draw) return;
-    
-    for (const auto& p : g_Players)
-    {
-        if (!p.valid || !p.onScreen) continue;
-        if (p.isEnemy && !g_ShowEnemies) continue;
-        if (!p.isEnemy && !g_ShowTeam) continue;
-        
-        float x = p.screenPos.x;
-        float y = p.screenPos.y;
-        float h = p.screenHeight;
-        float w = h * 0.5f;
-        
-        // Color based on team and visibility
-        ImU32 col;
-        if (p.isEnemy) {
-            if (p.isVisible)
-                col = IM_COL32((int)(box_color[0]*255), (int)(box_color[1]*255), (int)(box_color[2]*255), 255);
-            else
-                col = IM_COL32(255, 150, 0, 255); // Orange when not visible
-        } else {
-            col = IM_COL32(80, 180, 255, 255); // Blue for team
-        }
-        
-        // Box ESP
-        if (g_ESP_Box) {
-            if (g_ESP_BoxType == 0)
-                DrawBox2D(draw, x, y, w, h, col);
-            else
-                DrawBoxCorner(draw, x, y, w, h, col);
-        }
-        
-        // Skeleton ESP
-        if (g_ESP_Skeleton) {
-            BonePos bones = GetBoneScreenPositions(p);
-            DrawSkeleton(draw, bones, col);
-        }
-        
-        // Health bar
-        if (g_ESP_Health) {
-            DrawHealthBar(draw, x, y, w, h, p.health, p.maxHealth);
-        }
-        
-        // Head circle
-        if (g_ESP_HeadCircle) {
-            float headY = y - h * 0.45f;
-            draw->AddCircleFilled(ImVec2(x, headY), 5.0f, col);
-        }
-        
-        // Snapline (from bottom of screen to player)
-        if (g_ESP_Snapline) {
-            draw->AddLine(ImVec2(g_ScreenW / 2, g_ScreenH), ImVec2(x, y + h/2), col, 1.0f);
-        }
-        
-        // Name tag
-        if (g_ESP_Name) {
-            draw->AddText(ImVec2(x - 30, y - h/2 - 18), IM_COL32(255, 255, 255, 255), p.name);
-        }
-        
-        // Distance
-        if (g_ESP_Distance) {
-            char dist[16];
-            snprintf(dist, sizeof(dist), "%.0fm", p.distance);
-            draw->AddText(ImVec2(x - 15, y + h/2 + 4), IM_COL32(200, 200, 200, 255), dist);
-        }
-    }
-}
-
-// ============================================================================
-// Radar
-// ============================================================================
-static ImVec2 WorldToRadar(const Vec3& pos, const Vec3& local, float yaw, 
-                            float cx, float cy, float size, float zoom)
-{
-    float dx = pos.x - local.x;
-    float dy = pos.y - local.y;
-    
-    float rad = yaw * 0.0174533f;
+    float rad = g_LocalYaw * PI / 180.0f;
     float rx = dx * cosf(rad) - dy * sinf(rad);
     float ry = dx * sinf(rad) + dy * cosf(rad);
     
@@ -440,10 +127,7 @@ static ImVec2 WorldToRadar(const Vec3& pos, const Vec3& local, float yaw,
     
     float maxR = size * 0.45f;
     float len = sqrtf(rx * rx + ry * ry);
-    if (len > maxR) {
-        rx = rx / len * maxR;
-        ry = ry / len * maxR;
-    }
+    if (len > maxR) { rx = rx / len * maxR; ry = ry / len * maxR; }
     
     return ImVec2(cx + rx, cy - ry);
 }
@@ -452,39 +136,36 @@ void RenderRadarOverlay()
 {
     if (!g_Connected) return;
     
-    UpdateSimulation();
+    UpdateSim();
     
-    ImDrawList* draw = ImGui::GetBackgroundDrawList();
-    if (!draw) return;
+    ImGuiIO& io = ImGui::GetIO();
     
-    float x = g_RadarX;
-    float y = g_RadarY;
+    // Radar window
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - g_RadarSize - 30, 30), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(g_RadarSize + 20, g_RadarSize + 50), ImGuiCond_Always);
+    
+    ImGui::Begin("RADAR", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+    
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    
     float size = g_RadarSize;
-    float cx = x + size * 0.5f;
-    float cy = y + size * 0.5f;
+    float cx = pos.x + size * 0.5f;
+    float cy = pos.y + size * 0.5f;
     
     // Background
-    draw->AddRectFilled(ImVec2(x, y), ImVec2(x + size, y + size), IM_COL32(15, 15, 20, 235), 6.0f);
-    
-    // Border glow
-    draw->AddRect(ImVec2(x-1, y-1), ImVec2(x+size+1, y+size+1), IM_COL32(0, 100, 0, 80), 6.0f, 0, 4.0f);
-    draw->AddRect(ImVec2(x, y), ImVec2(x+size, y+size), IM_COL32(40, 200, 40, 255), 6.0f, 0, 2.0f);
+    draw->AddRectFilled(pos, ImVec2(pos.x + size, pos.y + size), IM_COL32(20, 20, 25, 255), 6.0f);
+    draw->AddRect(pos, ImVec2(pos.x + size, pos.y + size), IM_COL32(180, 50, 50, 255), 6.0f, 0, 2.0f);
     
     // Grid
-    ImU32 gridCol = IM_COL32(40, 40, 50, 150);
-    draw->AddLine(ImVec2(cx, y+10), ImVec2(cx, y+size-10), gridCol);
-    draw->AddLine(ImVec2(x+10, cy), ImVec2(x+size-10, cy), gridCol);
-    for (int i = 1; i <= 3; i++) {
+    ImU32 gridCol = IM_COL32(50, 50, 60, 200);
+    draw->AddLine(ImVec2(cx, pos.y + 5), ImVec2(cx, pos.y + size - 5), gridCol);
+    draw->AddLine(ImVec2(pos.x + 5, cy), ImVec2(pos.x + size - 5, cy), gridCol);
+    for (int i = 1; i <= 3; i++)
+    {
         float r = (size * 0.45f) * (i / 3.0f);
         draw->AddCircle(ImVec2(cx, cy), r, gridCol, 32);
     }
-    
-    // Compass
-    ImU32 compassCol = IM_COL32(100, 100, 100, 200);
-    draw->AddText(ImVec2(cx-3, y+2), compassCol, "N");
-    draw->AddText(ImVec2(cx-3, y+size-14), compassCol, "S");
-    draw->AddText(ImVec2(x+2, cy-6), compassCol, "W");
-    draw->AddText(ImVec2(x+size-10, cy-6), compassCol, "E");
     
     // Players
     for (const auto& p : g_Players)
@@ -493,33 +174,133 @@ void RenderRadarOverlay()
         if (p.isEnemy && !g_ShowEnemies) continue;
         if (!p.isEnemy && !g_ShowTeam) continue;
         
-        ImVec2 pos = WorldToRadar(p.position, g_LocalPos, g_LocalYaw, cx, cy, size, g_RadarZoom);
+        ImVec2 rpos = W2R(p.position, cx, cy, size, g_RadarZoom);
         
         ImU32 col = p.isEnemy ? 
             IM_COL32((int)(box_color[0]*255), (int)(box_color[1]*255), (int)(box_color[2]*255), 255) :
-            IM_COL32(80, 140, 255, 255);
+            IM_COL32((int)(team_color[0]*255), (int)(team_color[1]*255), (int)(team_color[2]*255), 255);
         
-        draw->AddCircleFilled(pos, 5.0f, col);
+        draw->AddCircleFilled(rpos, 5.0f, col);
         
-        float yawRad = p.yaw * 0.0174533f;
-        draw->AddLine(pos, ImVec2(pos.x + sinf(yawRad)*10, pos.y - cosf(yawRad)*10), col, 2.0f);
+        float yawRad = p.yaw * PI / 180.0f;
+        draw->AddLine(rpos, ImVec2(rpos.x + sinf(yawRad) * 10, rpos.y - cosf(yawRad) * 10), col, 2.0f);
     }
     
     // Local player
-    draw->AddCircleFilled(ImVec2(cx, cy), 6.0f, IM_COL32(0, 255, 0, 255));
-    draw->AddCircle(ImVec2(cx, cy), 8.0f, IM_COL32(0, 255, 0, 100), 12, 2.0f);
+    draw->AddCircleFilled(ImVec2(cx, cy), 6.0f, IM_COL32(50, 255, 50, 255));
+    float viewRad = g_LocalYaw * PI / 180.0f;
+    draw->AddLine(ImVec2(cx, cy), ImVec2(cx + sinf(viewRad) * 15, cy - cosf(viewRad) * 15), IM_COL32(50, 255, 50, 255), 2.0f);
     
-    float viewRad = g_LocalYaw * 0.0174533f;
-    draw->AddLine(ImVec2(cx, cy), ImVec2(cx + sinf(viewRad)*18, cy - cosf(viewRad)*18), IM_COL32(0, 255, 0, 255), 2.0f);
+    // Move cursor past the radar
+    ImGui::Dummy(ImVec2(size, size));
     
-    // Title bar
-    draw->AddRectFilled(ImVec2(x, y+size), ImVec2(x+size, y+size+22), IM_COL32(15, 15, 20, 235));
-    draw->AddText(ImVec2(x+6, y+size+4), IM_COL32(40, 200, 40, 255), "RADAR");
+    ImGui::Text("Players: %d", (int)g_Players.size());
     
-    char info[32];
-    snprintf(info, sizeof(info), "%d players", (int)g_Players.size());
-    draw->AddText(ImVec2(x+size-65, y+size+4), IM_COL32(150, 150, 150, 255), info);
+    ImGui::End();
     
-    // Now render 3D ESP
-    RenderESP();
+    // ESP Window (shows simulated ESP)
+    if (esp_enabled)
+    {
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 320, g_RadarSize + 100), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(300, 350), ImGuiCond_FirstUseEver);
+        
+        ImGui::Begin("ESP PREVIEW", nullptr, ImGuiWindowFlags_NoCollapse);
+        
+        ImVec2 espPos = ImGui::GetCursorScreenPos();
+        ImDrawList* espDraw = ImGui::GetWindowDrawList();
+        
+        // Draw some sample ESP boxes
+        for (int i = 0; i < 3; i++)
+        {
+            float x = espPos.x + 50 + i * 90;
+            float y = espPos.y + 50;
+            float h = 120.0f - i * 20;
+            float w = h * 0.4f;
+            
+            bool isEnemy = (i < 2);
+            ImU32 col = isEnemy ? 
+                IM_COL32((int)(box_color[0]*255), (int)(box_color[1]*255), (int)(box_color[2]*255), 255) :
+                IM_COL32((int)(team_color[0]*255), (int)(team_color[1]*255), (int)(team_color[2]*255), 255);
+            
+            // Box
+            if (g_ESP_Box)
+            {
+                if (g_ESP_BoxType == 0)
+                {
+                    espDraw->AddRect(ImVec2(x - w/2, y), ImVec2(x + w/2, y + h), col, 0, 0, 2.0f);
+                }
+                else
+                {
+                    float c = w * 0.3f;
+                    // Corners
+                    espDraw->AddLine(ImVec2(x - w/2, y), ImVec2(x - w/2 + c, y), col, 2.0f);
+                    espDraw->AddLine(ImVec2(x - w/2, y), ImVec2(x - w/2, y + c), col, 2.0f);
+                    espDraw->AddLine(ImVec2(x + w/2, y), ImVec2(x + w/2 - c, y), col, 2.0f);
+                    espDraw->AddLine(ImVec2(x + w/2, y), ImVec2(x + w/2, y + c), col, 2.0f);
+                    espDraw->AddLine(ImVec2(x - w/2, y + h), ImVec2(x - w/2 + c, y + h), col, 2.0f);
+                    espDraw->AddLine(ImVec2(x - w/2, y + h), ImVec2(x - w/2, y + h - c), col, 2.0f);
+                    espDraw->AddLine(ImVec2(x + w/2, y + h), ImVec2(x + w/2 - c, y + h), col, 2.0f);
+                    espDraw->AddLine(ImVec2(x + w/2, y + h), ImVec2(x + w/2, y + h - c), col, 2.0f);
+                }
+            }
+            
+            // Skeleton
+            if (g_ESP_Skeleton)
+            {
+                float headY = y + h * 0.05f;
+                float neckY = y + h * 0.12f;
+                float chestY = y + h * 0.25f;
+                float pelvisY = y + h * 0.5f;
+                float footY = y + h;
+                float armW = w * 0.6f;
+                
+                espDraw->AddCircle(ImVec2(x, headY), 6, col, 12, 2.0f);
+                espDraw->AddLine(ImVec2(x, headY + 6), ImVec2(x, pelvisY), col, 2.0f);
+                espDraw->AddLine(ImVec2(x, neckY), ImVec2(x - armW, chestY + 20), col, 2.0f);
+                espDraw->AddLine(ImVec2(x, neckY), ImVec2(x + armW, chestY + 20), col, 2.0f);
+                espDraw->AddLine(ImVec2(x, pelvisY), ImVec2(x - w * 0.3f, footY), col, 2.0f);
+                espDraw->AddLine(ImVec2(x, pelvisY), ImVec2(x + w * 0.3f, footY), col, 2.0f);
+            }
+            
+            // Health bar
+            if (g_ESP_Health)
+            {
+                int hp = 70 - i * 20;
+                float hpPct = hp / 100.0f;
+                float barH = h * hpPct;
+                int r = (int)(255 * (1.0f - hpPct));
+                int g = (int)(255 * hpPct);
+                
+                espDraw->AddRectFilled(ImVec2(x - w/2 - 7, y), ImVec2(x - w/2 - 3, y + h), IM_COL32(0, 0, 0, 200));
+                espDraw->AddRectFilled(ImVec2(x - w/2 - 6, y + h - barH), ImVec2(x - w/2 - 4, y + h), IM_COL32(r, g, 0, 255));
+            }
+            
+            // Name
+            if (g_ESP_Name)
+            {
+                char name[16];
+                snprintf(name, sizeof(name), "%s_%d", isEnemy ? "Enemy" : "Team", i + 1);
+                espDraw->AddText(ImVec2(x - 25, y - 15), IM_COL32(255, 255, 255, 255), name);
+            }
+            
+            // Distance
+            if (g_ESP_Distance)
+            {
+                char dist[16];
+                snprintf(dist, sizeof(dist), "%dm", 20 + i * 15);
+                espDraw->AddText(ImVec2(x - 10, y + h + 3), IM_COL32(200, 200, 200, 255), dist);
+            }
+            
+            // Head circle
+            if (g_ESP_HeadCircle)
+            {
+                espDraw->AddCircleFilled(ImVec2(x, y + h * 0.05f), 4, col);
+            }
+        }
+        
+        ImGui::Dummy(ImVec2(280, 200));
+        ImGui::Text("ESP Preview - Toggle options in ESP tab");
+        
+        ImGui::End();
+    }
 }

@@ -1,5 +1,5 @@
 // PROJECT ZERO - Professional Menu UI
-// Modern design like market DMA tools
+// Full ESP Controls: Box, Skeleton, Health, etc.
 
 #include "ZeroUI.hpp"
 #include "DMA_Engine.hpp"
@@ -10,16 +10,26 @@
 bool esp_enabled = true;
 bool aimbot_enabled = false;
 float refresh_rate = 144.0f;
-float box_color[4] = { 1.0f, 0.0f, 0.0f, 1.0f };
+float box_color[4] = { 1.0f, 0.2f, 0.2f, 1.0f };
 
 // Radar settings
-float g_RadarSize = 250.0f;
-float g_RadarZoom = 1.0f;
+float g_RadarSize = 220.0f;
+float g_RadarZoom = 1.5f;
 float g_RadarX = 20.0f;
 float g_RadarY = 20.0f;
 bool g_ShowEnemies = true;
 bool g_ShowTeam = false;
 bool g_ShowDistance = true;
+
+// ESP Settings
+bool g_ESP_Box = true;
+bool g_ESP_Skeleton = true;
+bool g_ESP_Health = true;
+bool g_ESP_Name = true;
+bool g_ESP_Distance = true;
+bool g_ESP_HeadCircle = true;
+bool g_ESP_Snapline = false;
+int g_ESP_BoxType = 1;  // 0=2D, 1=Corner
 
 // Aimbot settings  
 float g_AimFOV = 15.0f;
@@ -31,7 +41,6 @@ void InitializeZeroUI()
 {
     ImGuiStyle& s = ImGui::GetStyle();
     
-    // Modern rounded style
     s.WindowRounding = 8.0f;
     s.ChildRounding = 6.0f;
     s.FrameRounding = 4.0f;
@@ -48,68 +57,45 @@ void InitializeZeroUI()
     s.IndentSpacing = 20.0f;
     s.ScrollbarSize = 12.0f;
     s.GrabMinSize = 8.0f;
-    
     s.WindowBorderSize = 1.0f;
     s.ChildBorderSize = 1.0f;
     s.FrameBorderSize = 0.0f;
     s.PopupBorderSize = 1.0f;
     
-    // Dark theme with accent color
     ImVec4* c = s.Colors;
     
-    // Background colors
     c[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.10f, 0.96f);
     c[ImGuiCol_ChildBg] = ImVec4(0.10f, 0.10f, 0.12f, 0.96f);
     c[ImGuiCol_PopupBg] = ImVec4(0.08f, 0.08f, 0.10f, 0.96f);
-    
-    // Border
     c[ImGuiCol_Border] = ImVec4(0.20f, 0.60f, 0.20f, 0.60f);
     c[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-    
-    // Frame
     c[ImGuiCol_FrameBg] = ImVec4(0.14f, 0.14f, 0.16f, 1.00f);
     c[ImGuiCol_FrameBgHovered] = ImVec4(0.20f, 0.20f, 0.22f, 1.00f);
     c[ImGuiCol_FrameBgActive] = ImVec4(0.24f, 0.24f, 0.26f, 1.00f);
-    
-    // Title
     c[ImGuiCol_TitleBg] = ImVec4(0.04f, 0.04f, 0.06f, 1.00f);
     c[ImGuiCol_TitleBgActive] = ImVec4(0.10f, 0.40f, 0.10f, 1.00f);
     c[ImGuiCol_TitleBgCollapsed] = ImVec4(0.04f, 0.04f, 0.06f, 0.60f);
-    
-    // Scrollbar
     c[ImGuiCol_ScrollbarBg] = ImVec4(0.06f, 0.06f, 0.08f, 0.60f);
     c[ImGuiCol_ScrollbarGrab] = ImVec4(0.30f, 0.30f, 0.32f, 1.00f);
     c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.40f, 0.40f, 0.42f, 1.00f);
     c[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.50f, 0.50f, 0.52f, 1.00f);
-    
-    // Accent color (green)
     c[ImGuiCol_CheckMark] = ImVec4(0.20f, 0.90f, 0.20f, 1.00f);
     c[ImGuiCol_SliderGrab] = ImVec4(0.20f, 0.70f, 0.20f, 1.00f);
     c[ImGuiCol_SliderGrabActive] = ImVec4(0.20f, 0.90f, 0.20f, 1.00f);
-    
-    // Button
     c[ImGuiCol_Button] = ImVec4(0.16f, 0.16f, 0.18f, 1.00f);
     c[ImGuiCol_ButtonHovered] = ImVec4(0.20f, 0.50f, 0.20f, 1.00f);
     c[ImGuiCol_ButtonActive] = ImVec4(0.20f, 0.70f, 0.20f, 1.00f);
-    
-    // Header
     c[ImGuiCol_Header] = ImVec4(0.16f, 0.40f, 0.16f, 0.80f);
     c[ImGuiCol_HeaderHovered] = ImVec4(0.20f, 0.50f, 0.20f, 0.90f);
     c[ImGuiCol_HeaderActive] = ImVec4(0.20f, 0.60f, 0.20f, 1.00f);
-    
-    // Separator
     c[ImGuiCol_Separator] = ImVec4(0.30f, 0.30f, 0.32f, 0.60f);
     c[ImGuiCol_SeparatorHovered] = ImVec4(0.20f, 0.70f, 0.20f, 0.80f);
     c[ImGuiCol_SeparatorActive] = ImVec4(0.20f, 0.90f, 0.20f, 1.00f);
-    
-    // Tab
     c[ImGuiCol_Tab] = ImVec4(0.12f, 0.12f, 0.14f, 1.00f);
     c[ImGuiCol_TabHovered] = ImVec4(0.20f, 0.50f, 0.20f, 0.90f);
     c[ImGuiCol_TabActive] = ImVec4(0.16f, 0.40f, 0.16f, 1.00f);
     c[ImGuiCol_TabUnfocused] = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
     c[ImGuiCol_TabUnfocusedActive] = ImVec4(0.14f, 0.30f, 0.14f, 1.00f);
-    
-    // Text
     c[ImGuiCol_Text] = ImVec4(0.95f, 0.95f, 0.95f, 1.00f);
     c[ImGuiCol_TextDisabled] = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
 }
@@ -120,13 +106,10 @@ void RenderZeroMenu()
 {
     ImGuiIO& io = ImGui::GetIO();
     
-    // Center window on first use
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - 200, 100), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(400, 500), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - 220, 80), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(440, 550), ImGuiCond_FirstUseEver);
     
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
-    
-    if (!ImGui::Begin("PROJECT ZERO | BO6", nullptr, flags))
+    if (!ImGui::Begin("PROJECT ZERO | BO6 ESP", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings))
     {
         ImGui::End();
         return;
@@ -134,24 +117,21 @@ void RenderZeroMenu()
     
     // Header
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 0.9f, 0.2f, 1.0f));
-    ImGui::Text("STATUS: %s", IsConnected() ? "CONNECTED" : "SIMULATION");
+    ImGui::Text("STATUS: %s", IsConnected() ? "ONLINE" : "SIMULATION");
     ImGui::PopStyleColor();
-    
     ImGui::SameLine(ImGui::GetWindowWidth() - 80);
     ImGui::Text("%.0f FPS", io.Framerate);
     
     ImGui::Separator();
     ImGui::Spacing();
     
-    // Tab bar
     if (ImGui::BeginTabBar("##tabs", 0))
     {
-        // RADAR TAB
-        if (ImGui::BeginTabItem("RADAR"))
+        // ==================== ESP TAB ====================
+        if (ImGui::BeginTabItem("ESP"))
         {
             ImGui::Spacing();
-            
-            ImGui::Checkbox("Enable Radar", &esp_enabled);
+            ImGui::Checkbox("Enable ESP", &esp_enabled);
             
             if (esp_enabled)
             {
@@ -159,41 +139,87 @@ void RenderZeroMenu()
                 ImGui::Separator();
                 ImGui::Spacing();
                 
-                ImGui::Text("Display");
-                ImGui::SliderFloat("Size", &g_RadarSize, 150.0f, 400.0f, "%.0f px");
-                ImGui::SliderFloat("Zoom", &g_RadarZoom, 0.5f, 3.0f, "%.1fx");
-                ImGui::SliderFloat("Pos X", &g_RadarX, 0.0f, 500.0f, "%.0f");
-                ImGui::SliderFloat("Pos Y", &g_RadarY, 0.0f, 500.0f, "%.0f");
+                // Box settings
+                ImGui::Text("Box ESP");
+                ImGui::Checkbox("Enable Box", &g_ESP_Box);
+                if (g_ESP_Box) {
+                    ImGui::SameLine();
+                    ImGui::RadioButton("2D", &g_ESP_BoxType, 0);
+                    ImGui::SameLine();
+                    ImGui::RadioButton("Corner", &g_ESP_BoxType, 1);
+                }
+                
+                ImGui::Spacing();
+                
+                // Skeleton
+                ImGui::Text("Skeleton ESP");
+                ImGui::Checkbox("Enable Skeleton", &g_ESP_Skeleton);
+                
+                ImGui::Spacing();
+                
+                // Other ESP
+                ImGui::Text("Additional");
+                ImGui::Checkbox("Health Bar", &g_ESP_Health);
+                ImGui::SameLine(150);
+                ImGui::Checkbox("Name", &g_ESP_Name);
+                
+                ImGui::Checkbox("Distance", &g_ESP_Distance);
+                ImGui::SameLine(150);
+                ImGui::Checkbox("Head Circle", &g_ESP_HeadCircle);
+                
+                ImGui::Checkbox("Snaplines", &g_ESP_Snapline);
                 
                 ImGui::Spacing();
                 ImGui::Separator();
                 ImGui::Spacing();
                 
+                // Filters
                 ImGui::Text("Filters");
                 ImGui::Checkbox("Show Enemies", &g_ShowEnemies);
-                ImGui::Checkbox("Show Teammates", &g_ShowTeam);
-                ImGui::Checkbox("Show Distance", &g_ShowDistance);
+                ImGui::SameLine(150);
+                ImGui::Checkbox("Show Team", &g_ShowTeam);
                 
                 ImGui::Spacing();
+                
+                // Colors
+                ImGui::Text("Colors");
                 ImGui::ColorEdit4("Enemy Color", box_color);
             }
+            
+            ImGui::EndTabItem();
+        }
+        
+        // ==================== RADAR TAB ====================
+        if (ImGui::BeginTabItem("RADAR"))
+        {
+            ImGui::Spacing();
+            
+            ImGui::Text("Radar Settings");
+            ImGui::Separator();
+            ImGui::Spacing();
+            
+            ImGui::SliderFloat("Size", &g_RadarSize, 150.0f, 400.0f, "%.0f px");
+            ImGui::SliderFloat("Zoom", &g_RadarZoom, 0.5f, 5.0f, "%.1fx");
+            
+            ImGui::Spacing();
+            
+            ImGui::SliderFloat("Position X", &g_RadarX, 0.0f, 500.0f, "%.0f");
+            ImGui::SliderFloat("Position Y", &g_RadarY, 0.0f, 500.0f, "%.0f");
             
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
             
-            // Player list
             const auto& players = GetPlayerList();
             ImGui::Text("Players Detected: %d", (int)players.size());
             
             ImGui::EndTabItem();
         }
         
-        // AIMBOT TAB
+        // ==================== AIMBOT TAB ====================
         if (ImGui::BeginTabItem("AIMBOT"))
         {
             ImGui::Spacing();
-            
             ImGui::Checkbox("Enable Aimbot", &aimbot_enabled);
             
             if (aimbot_enabled)
@@ -202,7 +228,6 @@ void RenderZeroMenu()
                 ImGui::Separator();
                 ImGui::Spacing();
                 
-                ImGui::Text("Settings");
                 ImGui::SliderFloat("FOV", &g_AimFOV, 1.0f, 90.0f, "%.0f");
                 ImGui::SliderFloat("Smoothness", &g_AimSmooth, 1.0f, 20.0f, "%.1f");
                 
@@ -210,17 +235,13 @@ void RenderZeroMenu()
                 ImGui::Combo("Target Bone", &g_AimBone, bones, 4);
                 
                 ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
-                
-                ImGui::Text("Options");
                 ImGui::Checkbox("Visible Only", &g_AimVisible);
             }
             
             ImGui::EndTabItem();
         }
         
-        // SETTINGS TAB
+        // ==================== SETTINGS TAB ====================
         if (ImGui::BeginTabItem("SETTINGS"))
         {
             ImGui::Spacing();
@@ -230,7 +251,7 @@ void RenderZeroMenu()
             ImGui::Spacing();
             
             ImGui::Text("Target: %s", TARGET_PROCESS_NAME);
-            ImGui::Text("Mode: %s", IsConnected() ? "DMA Hardware" : "Simulation");
+            ImGui::Text("Mode: %s", IsConnected() ? "Hardware DMA" : "Simulation");
             
             ImGui::Spacing();
             ImGui::Spacing();
@@ -239,25 +260,15 @@ void RenderZeroMenu()
             ImGui::Separator();
             ImGui::Spacing();
             
-            ImGui::BulletText("F1 - Toggle ALL Overlay");
+            ImGui::BulletText("F1 - Toggle Overlay");
             ImGui::BulletText("INSERT - Toggle Menu");
-            ImGui::BulletText("END - Exit Program");
+            ImGui::BulletText("END - Exit");
             
             ImGui::Spacing();
             ImGui::Spacing();
             
-            ImGui::Text("Performance");
-            ImGui::Separator();
-            ImGui::Spacing();
-            
-            ImGui::SliderFloat("Refresh Rate", &refresh_rate, 30.0f, 240.0f, "%.0f Hz");
-            
-            ImGui::Spacing();
-            ImGui::Spacing();
-            
-            // Credits
-            ImGui::TextDisabled("PROJECT ZERO v1.0");
-            ImGui::TextDisabled("DMA Radar for Black Ops 6");
+            ImGui::TextDisabled("PROJECT ZERO v2.0");
+            ImGui::TextDisabled("Professional DMA ESP for BO6");
             
             ImGui::EndTabItem();
         }
@@ -268,7 +279,6 @@ void RenderZeroMenu()
     ImGui::End();
 }
 
-// Stub functions
 void ToggleZeroMenu() {}
 bool IsZeroMenuVisible() { return true; }
 void SetZeroMenuVisible(bool) {}

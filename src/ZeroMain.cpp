@@ -171,7 +171,7 @@ void UpdateThread()
 // ============================================================================
 inline void SetColor(const D2D1_COLOR_F& c) { if (g_Brush) g_Brush->SetColor(c); }
 
-void DrawText_(const wchar_t* txt, float x, float y, const D2D1_COLOR_F& col, bool small)
+void RenderString(const wchar_t* txt, float x, float y, const D2D1_COLOR_F& col, bool small)
 {
     if (!g_D2DTarget || !g_Brush) return;
     SetColor(col);
@@ -237,7 +237,7 @@ bool Toggle(const wchar_t* label, float x, float y, bool* value)
     DrawRoundedRect_(x, y, w, h, h/2, bg);
     float knobX = *value ? x + w - h + 2 : x + 2;
     FillCircle_(knobX + (h-4)/2, y + h/2, (h-4)/2, Colors::White);
-    DrawText_(label, x + w + 10, y, Colors::White, true);
+    RenderString(label, x + w + 10, y, Colors::White, true);
     
     if (g_MouseDown && InRect((float)g_MousePos.x, (float)g_MousePos.y, x, y, w + 150, h))
     {
@@ -251,7 +251,7 @@ bool Toggle(const wchar_t* label, float x, float y, bool* value)
 bool Slider(const wchar_t* label, float x, float y, float* value, float minV, float maxV)
 {
     float w = 150, h = 6;
-    DrawText_(label, x, y - 18, Colors::White, true);
+    RenderString(label, x, y - 18, Colors::White, true);
     
     FillRect_(x, y + 7, w, h, Colors::Gray);
     float pct = (*value - minV) / (maxV - minV);
@@ -260,7 +260,7 @@ bool Slider(const wchar_t* label, float x, float y, float* value, float minV, fl
     
     wchar_t valStr[16];
     swprintf_s(valStr, L"%.1f", *value);
-    DrawText_(valStr, x + w + 10, y - 2, Colors::Gray, true);
+    RenderString(valStr, x + w + 10, y - 2, Colors::Gray, true);
     
     if (g_MouseDown && InRect((float)g_MousePos.x, (float)g_MousePos.y, x - 5, y, w + 10, 20))
     {
@@ -318,14 +318,14 @@ void RenderESP()
         {
             wchar_t nameW[32];
             mbstowcs_s(nullptr, nameW, p.name, 31);
-            DrawText_(nameW, screenX - 30, screenY - boxH - 18, Colors::White, true);
+            RenderString(nameW, screenX - 30, screenY - boxH - 18, Colors::White, true);
         }
         
         if (g_Settings.espDistance)
         {
             wchar_t distStr[16];
             swprintf_s(distStr, L"%.0fm", p.distance);
-            DrawText_(distStr, screenX - 15, screenY + 5, Colors::Yellow, true);
+            RenderString(distStr, screenX - 15, screenY + 5, Colors::Yellow, true);
         }
     }
 }
@@ -388,7 +388,7 @@ void RenderRadar()
         FillCircle_(radarPos.x, radarPos.y, 4, dotColor);
     }
     
-    DrawText_(L"RADAR", cx - 20, cy + size/2 + 5, Colors::White, true);
+    RenderString(L"RADAR", cx - 20, cy + size/2 + 5, Colors::White, true);
 }
 
 // ============================================================================
@@ -405,7 +405,7 @@ void RenderMenu()
     
     DrawRoundedRect_(menuX, menuY, menuW, menuH, 10, Colors::MenuBG);
     FillRect_(menuX, menuY, menuW, 40, Colors::Accent);
-    DrawText_(L"PROJECT ZERO | v4.1", menuX + 10, menuY + 8, Colors::White, false);
+    RenderString(L"PROJECT ZERO | v4.1", menuX + 10, menuY + 8, Colors::White, false);
     
     // Status indicator - REAL STATUS
     bool dmaOnline = DMAEngine::IsConnected();
@@ -420,7 +420,7 @@ void RenderMenu()
         float tabX = menuX + 10 + i * 95;
         D2D1_COLOR_F tabColor = (i == g_CurrentTab) ? Colors::Accent : Colors::DarkGray;
         DrawRoundedRect_(tabX, tabY, 90, 30, 5, tabColor);
-        DrawText_(tabs[i], tabX + 20, tabY + 5, Colors::White, true);
+        RenderString(tabs[i], tabX + 20, tabY + 5, Colors::White, true);
         
         if (g_MouseDown && InRect((float)g_MousePos.x, (float)g_MousePos.y, tabX, tabY, 90, 30))
         {
@@ -459,13 +459,13 @@ void RenderMenu()
             bool kmConnected = IsKMBoxConnected();
             wchar_t kmStatus[64];
             swprintf_s(kmStatus, L"KMBox: %S", GetKMBoxStatus());
-            DrawText_(kmStatus, contentX, contentY + 200, kmConnected ? Colors::Green : Colors::Red, true);
+            RenderString(kmStatus, contentX, contentY + 200, kmConnected ? Colors::Green : Colors::Red, true);
             
             if (kmConnected)
             {
                 wchar_t portInfo[32];
                 swprintf_s(portInfo, L"Port: %S", HardwareController::GetLockedPort());
-                DrawText_(portInfo, contentX, contentY + 225, Colors::Gray, true);
+                RenderString(portInfo, contentX, contentY + 225, Colors::Gray, true);
             }
         }
         break;
@@ -476,27 +476,27 @@ void RenderMenu()
             bool dmaOK = DMAEngine::IsConnected();
             wchar_t dmaStatus[64];
             swprintf_s(dmaStatus, L"DMA: %S", DMAEngine::GetStatus());
-            DrawText_(dmaStatus, contentX, contentY, dmaOK ? Colors::Green : Colors::Red, true);
+            RenderString(dmaStatus, contentX, contentY, dmaOK ? Colors::Green : Colors::Red, true);
             
             // KMBox Status - REAL
             bool kmOK = IsKMBoxConnected();
             wchar_t kmStatus[64];
             swprintf_s(kmStatus, L"KMBox: %S", GetKMBoxStatus());
-            DrawText_(kmStatus, contentX, contentY + 30, kmOK ? Colors::Green : Colors::Red, true);
+            RenderString(kmStatus, contentX, contentY + 30, kmOK ? Colors::Green : Colors::Red, true);
             
             // Resolution
             wchar_t resInfo[64];
             swprintf_s(resInfo, L"Resolution: %dx%d", g_MonitorWidth, g_MonitorHeight);
-            DrawText_(resInfo, contentX, contentY + 60, Colors::White, true);
+            RenderString(resInfo, contentX, contentY + 60, Colors::White, true);
             
             // Offsets
             wchar_t offsetStatus[64];
             swprintf_s(offsetStatus, L"Offsets: %s", OffsetUpdater::s_Synced ? L"CLOUD" : L"LOCAL");
-            DrawText_(offsetStatus, contentX, contentY + 90, OffsetUpdater::s_Synced ? Colors::Green : Colors::Yellow, true);
+            RenderString(offsetStatus, contentX, contentY + 90, OffsetUpdater::s_Synced ? Colors::Green : Colors::Yellow, true);
             
-            DrawText_(L"---", contentX, contentY + 130, Colors::Gray, true);
-            DrawText_(L"INSERT - Toggle Menu", contentX, contentY + 155, Colors::Gray, true);
-            DrawText_(L"END - Exit", contentX, contentY + 180, Colors::Gray, true);
+            RenderString(L"---", contentX, contentY + 130, Colors::Gray, true);
+            RenderString(L"INSERT - Toggle Menu", contentX, contentY + 155, Colors::Gray, true);
+            RenderString(L"END - Exit", contentX, contentY + 180, Colors::Gray, true);
         }
         break;
     }

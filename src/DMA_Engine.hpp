@@ -1,12 +1,10 @@
-// DMA_Engine.hpp - Final Hardware & Cloud Integration v3.3
+// DMA_Engine.hpp - Fully Automatic Hardware Sync v3.4
+// Silent mode, auto-retry, auto COM port detection
 #pragma once
 
-// ============================================================================
-// CONFIGURATION FLAGS
-// ============================================================================
-#define DMA_ENABLED 1          // Enable DMA hardware
-#define USE_FTD3XX 0           // Not using FTD3XX for now
-#define USE_LIBCURL 0          // Using WinHTTP instead
+#define DMA_ENABLED 1
+#define USE_FTD3XX 0
+#define USE_LIBCURL 0
 
 #include <cstdint>
 #include <vector>
@@ -42,7 +40,7 @@ struct ControllerConfig {
     char ipAddress[32] = "192.168.2.188";
     int port = 16896;
     int baudRate = 115200;
-    bool autoDetect = false;
+    bool autoDetect = true;
 };
 
 // ============================================================================
@@ -179,25 +177,23 @@ struct MapInfo {
 // CONSOLE COLORS
 // ============================================================================
 enum ConsoleColor {
-    COLOR_DEFAULT = 7,
-    COLOR_RED = 12,
-    COLOR_GREEN = 10,
-    COLOR_YELLOW = 14,
-    COLOR_BLUE = 9,
-    COLOR_CYAN = 11,
-    COLOR_MAGENTA = 13,
-    COLOR_WHITE = 15,
-    COLOR_GRAY = 8
+    COLOR_DEFAULT = 7, COLOR_RED = 12, COLOR_GREEN = 10,
+    COLOR_YELLOW = 14, COLOR_BLUE = 9, COLOR_CYAN = 11,
+    COLOR_MAGENTA = 13, COLOR_WHITE = 15, COLOR_GRAY = 8
 };
 
 // ============================================================================
-// LOGGER
+// LOGGER - QUIET MODE SUPPORT
 // ============================================================================
 class Logger {
 public:
     static void* s_Console;
+    static bool s_Initialized;
+    
     static void Initialize();
     static void Shutdown();
+    static void ShowConsole();    // Show only on critical failure
+    static void HideConsole();    // Hide in quiet mode
     static void SetColor(ConsoleColor c);
     static void ResetColor();
     static void Log(const char* m, ConsoleColor c = COLOR_DEFAULT);
@@ -216,7 +212,7 @@ public:
 };
 
 // ============================================================================
-// HARDWARE CONTROLLER
+// HARDWARE CONTROLLER - AUTO PORT DETECTION
 // ============================================================================
 class HardwareController {
 public:
@@ -225,12 +221,14 @@ public:
     static bool s_Connected;
     static ControllerType s_Type;
     static char s_DeviceName[64];
+    static char s_LockedPort[16];    // Auto-locked COM port
 
-    static bool Initialize();
+    static bool Initialize();         // Auto-scans and locks
     static void Shutdown();
     static bool IsConnected();
     static const char* GetDeviceName();
     static ControllerType GetType();
+    static const char* GetLockedPort();
     static bool MoveMouse(int dx, int dy);
     static bool Click(int button);
     static bool Press(int button);
@@ -247,7 +245,7 @@ public:
 };
 
 // ============================================================================
-// OFFSET UPDATER (GitHub Cloud)
+// OFFSET UPDATER
 // ============================================================================
 class OffsetUpdater {
 public:
@@ -263,7 +261,7 @@ public:
     static void SetOffsetURL(const char* url);
     static bool FetchRemoteOffsets(const char* url = nullptr);
     static bool UpdateOffsetsFromServer();
-    static bool SyncWithCloud(int maxRetries = 2, int retryDelayMs = 2000);
+    static bool SyncWithCloud(int maxRetries = 2, int retryDelayMs = 1000);
     static bool HttpGet(const char* url, std::string& response);
     static bool ParseOffsetsJSON(const char* jsonData);
     static bool ParseOffsetsINI(const char* iniData);
@@ -318,7 +316,6 @@ public:
 // ============================================================================
 class DMAEngine {
 public:
-    // PUBLIC static members (accessible from ProfessionalInit)
     static bool s_Connected;
     static bool s_Online;
     static bool s_SimulationMode;
@@ -380,11 +377,11 @@ public:
 };
 
 // ============================================================================
-// PROFESSIONAL INIT
+// PROFESSIONAL INIT - FULLY AUTOMATIC
 // ============================================================================
 class ProfessionalInit {
 public:
-    static bool RunProfessionalChecks();
+    static bool RunProfessionalChecks();  // Auto-runs everything silently
     static void SimulateDelay(int ms);
     static bool CheckDMAConnection();
     static bool CheckMemoryMap();
@@ -441,18 +438,11 @@ float GetFOVTo(const Vec2& center, const Vec2& target);
 Vec3 CalcAngle(const Vec3& src, const Vec3& dst);
 void SmoothAngle(Vec3& current, const Vec3& target, float smoothness);
 
-// ============================================================================
-// CONFIG
-// ============================================================================
 bool LoadConfig(const char* filename);
 bool SaveConfig(const char* filename);
 void CreateDefaultConfig(const char* filename);
-
 void ExecuteScatterReads(std::vector<ScatterEntry>& entries);
 
-// ============================================================================
-// GLOBAL INSTANCES
-// ============================================================================
 extern DMAConfig g_Config;
 extern GameOffsetsStruct g_Offsets;
 extern ScatterReadRegistry g_ScatterRegistry;

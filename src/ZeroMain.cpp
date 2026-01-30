@@ -1,5 +1,5 @@
-// ZeroMain.cpp - Final Hardware & Cloud Integration v3.3
-// DirectX 11 + Direct2D Overlay with Ghost Drawing Prevention
+// ZeroMain.cpp - Fully Automatic v3.4
+// Direct Launch, Quiet Mode, No Manual Input Required
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -22,26 +22,22 @@
 // SETTINGS
 // ============================================================================
 struct AppSettings {
-    // Aimbot
     bool aimbotEnabled = false;
     float aimbotFOV = 30.0f;
     float aimbotSmooth = 5.0f;
     int aimbotBone = 0;
     bool aimbotFOVCircle = true;
     
-    // ESP
     bool espEnabled = true;
     bool espBoxes = true;
     bool espHealth = true;
     bool espNames = true;
     bool espDistance = true;
     
-    // Radar
     bool radarEnabled = true;
     float radarSize = 180.0f;
     float radarZoom = 1.5f;
     
-    // Misc
     bool crosshair = true;
 };
 
@@ -81,7 +77,6 @@ namespace Colors {
     const D2D1_COLOR_F Gray = {0.5f, 0.5f, 0.5f, 1.0f};
     const D2D1_COLOR_F DarkGray = {0.15f, 0.15f, 0.15f, 0.95f};
     const D2D1_COLOR_F Accent = {0.8f, 0.1f, 0.1f, 1.0f};
-    const D2D1_COLOR_F AccentDark = {0.5f, 0.05f, 0.05f, 1.0f};
     const D2D1_COLOR_F Background = {0.08f, 0.08f, 0.08f, 0.95f};
     const D2D1_COLOR_F Blue = {0.2f, 0.4f, 1.0f, 1.0f};
 }
@@ -119,7 +114,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 }
 
 // ============================================================================
-// INPUT THREAD
+// INPUT THREAD - BACKGROUND HOTKEY LISTENER
 // ============================================================================
 void InputThread()
 {
@@ -150,14 +145,13 @@ void InputThread()
 }
 
 // ============================================================================
-// UPDATE THREAD
+// UPDATE THREAD - AUTOMATIC PLAYER DATA SYNC
 // ============================================================================
 void UpdateThread()
 {
     while (g_Running)
     {
-        // Check game status
-        g_GameRunning = DMAEngine::IsOnline() || DMAEngine::s_SimulationMode;
+        g_GameRunning = DMAEngine::IsOnline();
         
         if (g_GameRunning)
             PlayerManager::Update();
@@ -274,7 +268,7 @@ bool Slider(const wchar_t* label, float x, float y, float* value, float minVal, 
 }
 
 // ============================================================================
-// RENDER ESP - WITH GHOST PREVENTION
+// RENDER ESP - NO GHOST DRAWINGS
 // ============================================================================
 void RenderESP()
 {
@@ -286,34 +280,27 @@ void RenderESP()
     
     for (auto& p : players)
     {
-        // === GHOST PREVENTION: Skip players at (0, 0) ===
-        if (p.origin.x == 0 && p.origin.y == 0)
-            continue;
-        
+        // Skip ghosts at (0,0)
+        if (p.origin.x == 0 && p.origin.y == 0) continue;
         if (!p.valid || !p.isAlive) continue;
         
-        // Calculate screen position based on radar angle
         float angle = p.yaw * 3.14159f / 180.0f;
         float dist = p.distance;
         float screenX = centerX + cosf(angle) * (dist * 3.0f);
         float screenY = centerY + sinf(angle) * (dist * 3.0f);
         
-        // Clamp to screen
         if (screenX < 0 || screenX > g_Width || screenY < 0 || screenY > g_Height)
             continue;
         
-        // Box dimensions
         float boxH = 80.0f - dist * 0.3f;
         if (boxH < 30) boxH = 30;
         float boxW = boxH * 0.4f;
         
         D2D1_COLOR_F color = p.isEnemy ? Colors::Red : Colors::Green;
         
-        // Box
         if (g_Settings.espBoxes)
             DrawRect2D(screenX - boxW/2, screenY - boxH, boxW, boxH, color, 2.0f);
         
-        // Health bar
         if (g_Settings.espHealth)
         {
             float healthPct = (float)p.health / (float)p.maxHealth;
@@ -322,7 +309,6 @@ void RenderESP()
             FillRect2D(screenX - boxW/2 - 6, screenY - barH, 4, barH, hpColor);
         }
         
-        // Name
         if (g_Settings.espNames)
         {
             wchar_t nameW[32];
@@ -330,7 +316,6 @@ void RenderESP()
             DrawText2D(nameW, screenX - 30, screenY - boxH - 18, Colors::White, true);
         }
         
-        // Distance
         if (g_Settings.espDistance)
         {
             wchar_t distStr[16];
@@ -356,7 +341,7 @@ void RenderCrosshair()
 }
 
 // ============================================================================
-// RENDER RADAR - WITH GHOST PREVENTION
+// RENDER RADAR - NO GHOST DRAWINGS
 // ============================================================================
 void RenderRadar()
 {
@@ -366,15 +351,12 @@ void RenderRadar()
     float cx = 20 + size/2;
     float cy = 20 + size/2;
     
-    // Background
     FillCircle2D(cx, cy, size/2, D2D1_COLOR_F{0.1f, 0.1f, 0.1f, 0.85f});
     DrawCircle2D(cx, cy, size/2, Colors::Accent, 2.0f);
     
-    // Crosshairs
     DrawLine2D(cx - size/2, cy, cx + size/2, cy, D2D1_COLOR_F{0.3f, 0.3f, 0.3f, 0.5f});
     DrawLine2D(cx, cy - size/2, cx, cy + size/2, D2D1_COLOR_F{0.3f, 0.3f, 0.3f, 0.5f});
     
-    // Local player indicator
     FillCircle2D(cx, cy, 4, Colors::Blue);
     
     auto& players = PlayerManager::GetPlayers();
@@ -382,16 +364,13 @@ void RenderRadar()
     
     for (auto& p : players)
     {
-        // === GHOST PREVENTION: Skip players at (0, 0) ===
-        if (p.origin.x == 0 && p.origin.y == 0)
-            continue;
-        
+        // Skip ghosts at (0,0)
+        if (p.origin.x == 0 && p.origin.y == 0) continue;
         if (!p.valid || !p.isAlive) continue;
         
         Vec2 radarPos;
         WorldToRadar(p.origin, local.origin, local.yaw, radarPos, cx, cy, size);
         
-        // Clamp to radar bounds
         float dx = radarPos.x - cx;
         float dy = radarPos.y - cy;
         float dist = sqrtf(dx*dx + dy*dy);
@@ -406,7 +385,6 @@ void RenderRadar()
         FillCircle2D(radarPos.x, radarPos.y, 4, dotColor);
     }
     
-    // Title
     DrawText2D(L"RADAR", cx - 20, cy + size/2 + 5, Colors::White, true);
 }
 
@@ -422,21 +400,17 @@ void RenderMenu()
     float menuW = 400;
     float menuH = 400;
     
-    // Background
     DrawRoundedRect2D(menuX, menuY, menuW, menuH, 10, Colors::Background);
     
-    // Title bar
     FillRect2D(menuX, menuY, menuW, 40, Colors::Accent);
-    DrawText2D(L"PROJECT ZERO | v3.3", menuX + 10, menuY + 8, Colors::White);
+    DrawText2D(L"PROJECT ZERO | v3.4", menuX + 10, menuY + 8, Colors::White);
     
-    // Status indicator
-    bool isOnline = DMAEngine::IsOnline() || DMAEngine::s_SimulationMode;
-    D2D1_COLOR_F statusColor = isOnline ? Colors::Green : Colors::Red;
+    bool isOnline = DMAEngine::IsOnline();
+    D2D1_COLOR_F statusColor = isOnline ? Colors::Green : Colors::Yellow;
     FillCircle2D(menuX + menuW - 25, menuY + 20, 8, statusColor);
     
-    // Tab buttons
     float tabY = menuY + 50;
-    const wchar_t* tabs[] = {L"ESP", L"RADAR", L"AIMBOT", L"MISC"};
+    const wchar_t* tabs[] = {L"ESP", L"RADAR", L"AIMBOT", L"INFO"};
     for (int i = 0; i < 4; i++)
     {
         float tabX = menuX + 10 + i * 95;
@@ -454,7 +428,6 @@ void RenderMenu()
     float contentY = tabY + 45;
     float contentX = menuX + 20;
     
-    // Tab content
     switch (g_CurrentTab)
     {
     case 0: // ESP
@@ -477,32 +450,41 @@ void RenderMenu()
         Slider(L"FOV", contentX, contentY + 90, &g_Settings.aimbotFOV, 5, 100);
         Slider(L"Smooth", contentX, contentY + 145, &g_Settings.aimbotSmooth, 1, 20);
         
-        // KMBox status
         {
             wchar_t kmStatus[64];
-            const char* kmStatusStr = HardwareController::IsConnected() ? "CONNECTED" : "DISCONNECTED";
-            swprintf_s(kmStatus, L"KMBox: %S", kmStatusStr);
+            swprintf_s(kmStatus, L"KMBox: %S", HardwareController::IsConnected() ? "AUTO-LOCKED" : "Software");
             DrawText2D(kmStatus, contentX, contentY + 200, 
-                       HardwareController::IsConnected() ? Colors::Green : Colors::Red, true);
+                       HardwareController::IsConnected() ? Colors::Green : Colors::Yellow, true);
+            
+            if (HardwareController::IsConnected())
+            {
+                wchar_t portInfo[32];
+                swprintf_s(portInfo, L"Port: %S", HardwareController::GetLockedPort());
+                DrawText2D(portInfo, contentX, contentY + 225, Colors::Gray, true);
+            }
         }
         break;
         
-    case 3: // MISC
-        Toggle(L"Crosshair", contentX, contentY, &g_Settings.crosshair);
-        
-        // Status info
+    case 3: // INFO
         {
             wchar_t dmaStatus[64];
             swprintf_s(dmaStatus, L"DMA: %S", DMAEngine::GetStatus());
-            DrawText2D(dmaStatus, contentX, contentY + 60, Colors::White, true);
+            DrawText2D(dmaStatus, contentX, contentY, Colors::White, true);
             
             wchar_t cloudStatus[64];
-            swprintf_s(cloudStatus, L"Cloud: %s", OffsetUpdater::s_Synced ? L"SYNCED" : L"OFFLINE");
-            DrawText2D(cloudStatus, contentX, contentY + 85, 
+            swprintf_s(cloudStatus, L"Offsets: %s", OffsetUpdater::s_Synced ? L"CLOUD" : L"LOCAL");
+            DrawText2D(cloudStatus, contentX, contentY + 25, 
                        OffsetUpdater::s_Synced ? Colors::Green : Colors::Yellow, true);
             
-            DrawText2D(L"INSERT - Toggle Menu", contentX, contentY + 130, Colors::Gray, true);
-            DrawText2D(L"END - Exit", contentX, contentY + 155, Colors::Gray, true);
+            wchar_t modeInfo[32];
+            swprintf_s(modeInfo, L"Mode: %s", DMAEngine::s_SimulationMode ? L"SIMULATION" : L"HARDWARE");
+            DrawText2D(modeInfo, contentX, contentY + 50, Colors::White, true);
+            
+            DrawText2D(L"---", contentX, contentY + 85, Colors::Gray, true);
+            DrawText2D(L"INSERT - Toggle Menu", contentX, contentY + 110, Colors::Gray, true);
+            DrawText2D(L"END - Exit", contentX, contentY + 135, Colors::Gray, true);
+            DrawText2D(L"---", contentX, contentY + 170, Colors::Gray, true);
+            DrawText2D(L"Fully Automatic Mode", contentX, contentY + 195, Colors::Green, true);
         }
         break;
     }
@@ -546,10 +528,8 @@ bool CreateOverlayWindow()
     
     if (!g_Hwnd) return false;
     
-    // Make black color transparent (click-through)
     SetLayeredWindowAttributes(g_Hwnd, RGB(0, 0, 0), 0, LWA_COLORKEY);
     
-    // Extend frame for transparency
     MARGINS margins = {-1, -1, -1, -1};
     DwmExtendFrameIntoClientArea(g_Hwnd, &margins);
     
@@ -585,13 +565,11 @@ bool InitGraphics()
         &g_SwapChain, &g_D3DDevice, nullptr, &g_D3DContext)))
         return false;
     
-    // Create render target
     ID3D11Texture2D* backBuffer = nullptr;
     g_SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&backBuffer);
     g_D3DDevice->CreateRenderTargetView(backBuffer, nullptr, &g_RenderTarget);
     backBuffer->Release();
     
-    // Init D2D
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &g_D2DFactory);
     
     IDXGISurface* surface = nullptr;
@@ -606,7 +584,6 @@ bool InitGraphics()
     
     g_D2DTarget->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1), &g_Brush);
     
-    // Init DirectWrite
     DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown**)&g_DWriteFactory);
     g_DWriteFactory->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 16.0f, L"en-us", &g_TextFormat);
@@ -636,23 +613,24 @@ void Cleanup()
 }
 
 // ============================================================================
-// MAIN
+// MAIN - DIRECT LAUNCH, NO MANUAL INPUT REQUIRED
 // ============================================================================
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
 {
-    // === FIRST: Initialize DMA Hardware ===
+    // ======================================
+    // AUTOMATIC HARDWARE CHECK (<1 second)
+    // ======================================
     if (!DMAEngine::Initialize())
     {
-        MessageBoxW(nullptr, L"Initialization failed!", L"Error", MB_ICONERROR);
+        // Critical failure - show error
+        MessageBoxW(nullptr, L"Critical hardware failure!\n\nPlease check:\n- DMA device connected\n- Drivers installed", 
+                    L"PROJECT ZERO", MB_ICONERROR);
         return 1;
     }
     
-    // Hide console after init
-    HWND consoleWnd = GetConsoleWindow();
-    if (consoleWnd)
-        ShowWindow(consoleWnd, SW_HIDE);
-    
-    // Create overlay
+    // ======================================
+    // DIRECT LAUNCH OVERLAY
+    // ======================================
     if (!CreateOverlayWindow())
     {
         MessageBoxW(nullptr, L"Failed to create overlay!", L"Error", MB_ICONERROR);
@@ -668,14 +646,16 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
     // Initialize player manager
     PlayerManager::Initialize();
     
-    // Start threads
+    // Start background threads (automatic)
     std::thread inputThread(InputThread);
     std::thread updateThread(UpdateThread);
     
-    // Menu starts hidden
+    // Menu starts hidden, overlay is click-through
     g_MenuVisible = false;
     
-    // Main loop
+    // ======================================
+    // MAIN RENDER LOOP
+    // ======================================
     MSG msg = {};
     while (g_Running)
     {
@@ -689,15 +669,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
         
         if (!g_Running) break;
         
-        // Clear
         float clearColor[4] = {0, 0, 0, 0};
         g_D3DContext->ClearRenderTargetView(g_RenderTarget, clearColor);
         
-        // Begin D2D
         g_D2DTarget->BeginDraw();
         g_D2DTarget->Clear(Colors::Transparent);
         
-        // Draw only when game is running or menu is visible
+        // Render only when needed
         if (g_GameRunning || g_MenuVisible)
         {
             RenderESP();
@@ -706,13 +684,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
             RenderAimbotFOV();
         }
         
-        // Menu always available
         RenderMenu();
         
-        // End D2D
         g_D2DTarget->EndDraw();
         
-        // Present (V-Sync off)
         g_SwapChain->Present(0, 0);
         
         Sleep(1);

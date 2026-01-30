@@ -1,1 +1,13 @@
-Zero Project
+Zero Elite
+
+DirectX 11 overlay project using a lightweight ImGui-compatible UI layer.
+
+## Build (Visual Studio)
+1. Open `ZeroElite.sln` in Visual Studio 2022.
+2. Select the **x64** configuration.
+3. Build and run.
+
+## Notes
+- `libs/vmmdll.lib` is referenced via `#pragma comment(lib, "..\\libs\\vmmdll.lib")`.
+  Replace the placeholder file with the real `vmmdll.lib` from your DMA SDK.
+- Toggle the menu with the **INSERT** key.

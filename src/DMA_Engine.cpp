@@ -48,7 +48,7 @@ extern bool g_ShowTeam;
 extern bool g_ShowDistance;
 extern float box_color[4];
 
-// ESP Settings (will be controlled from menu)
+// ESP Settings
 extern bool g_ESP_Box;
 extern bool g_ESP_Skeleton;
 extern bool g_ESP_Health;
@@ -56,7 +56,15 @@ extern bool g_ESP_Name;
 extern bool g_ESP_Distance;
 extern bool g_ESP_HeadCircle;
 extern bool g_ESP_Snapline;
-extern int g_ESP_BoxType;  // 0=2D, 1=Corner, 2=3D
+extern int g_ESP_BoxType;
+
+// Misc Settings
+extern bool g_Triggerbot;
+extern bool g_NoFlash;
+extern bool g_NoSmoke;
+extern bool g_RadarHack;
+extern bool g_Bhop;
+extern bool g_MagicBullet;
 
 // ============================================================================
 // Bone structure for skeleton

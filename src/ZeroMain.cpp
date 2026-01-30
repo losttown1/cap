@@ -12,7 +12,7 @@
 #include "../include/imgui_impl_win32.h"
 
 // Zero Elite includes
-#include "ZeroUI.h"
+#include "ZeroUI.hpp"
 #include "DMA_Engine.h"
 
 // Link DirectX and system libraries
@@ -221,7 +221,7 @@ bool CreateOverlayWindow()
 // Update window clickthrough state based on menu visibility
 void UpdateWindowClickthrough()
 {
-    if (ZeroElite::ZeroUI::IsMenuVisible())
+    if (IsZeroMenuVisible())
     {
         // Menu visible - allow input
         SetWindowLongW(g_hWnd, GWL_EXSTYLE, 
@@ -262,15 +262,15 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             // INSERT key to toggle menu
             if (wParam == VK_INSERT)
             {
-                ZeroElite::ZeroUI::ToggleMenu();
+                ToggleZeroMenu();
                 UpdateWindowClickthrough();
             }
             // ESC to close menu
             else if (wParam == VK_ESCAPE)
             {
-                if (ZeroElite::ZeroUI::IsMenuVisible())
+                if (IsZeroMenuVisible())
                 {
-                    ZeroElite::ZeroUI::SetMenuVisible(false);
+                    SetZeroMenuVisible(false);
                     UpdateWindowClickthrough();
                 }
             }
@@ -359,11 +359,11 @@ int APIENTRY wWinMain(
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
     // Initialize Zero Elite UI
-    ZeroElite::ZeroUI::Initialize();
+    InitializeZeroUI();
 
     // Initialize DMA Engine with target PID and handle
-    if (ZeroElite::DMAEngine::Initialize(ZeroElite::TARGET_PID, 
-                                          reinterpret_cast<HANDLE>(ZeroElite::TARGET_HANDLE)))
+    if (ZeroElite::DMAEngine::Initialize(35028, 
+                                          reinterpret_cast<HANDLE>(0x021EE040)))
     {
         std::cout << "[Zero Elite] DMA Engine initialized" << std::endl;
     }
@@ -404,7 +404,7 @@ int APIENTRY wWinMain(
         // Handle hotkeys (alternative method for when window doesn't have focus)
         if (GetAsyncKeyState(VK_INSERT) & 1)
         {
-            ZeroElite::ZeroUI::ToggleMenu();
+            ToggleZeroMenu();
             UpdateWindowClickthrough();
         }
 
@@ -419,7 +419,7 @@ int APIENTRY wWinMain(
         ImGui::NewFrame();
 
         // Render Zero Elite UI
-        ZeroElite::ZeroUI::Render();
+        RenderZeroMenu();
 
         // End ImGui frame
         ImGui::EndFrame();
@@ -433,12 +433,12 @@ int APIENTRY wWinMain(
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
         // Present the frame
-        int refreshRate = ZeroElite::ZeroUI::GetRefreshRate();
+        int refreshRate = static_cast<int>(refresh_rate);
         UINT syncInterval = (refreshRate >= 60) ? 1 : 0;
         g_pSwapChain->Present(syncInterval, 0);
 
         // Optional: Limit frame rate when menu is hidden to reduce CPU usage
-        if (!ZeroElite::ZeroUI::IsMenuVisible())
+        if (!IsZeroMenuVisible())
         {
             Sleep(1000 / refreshRate);
         }
@@ -449,7 +449,7 @@ int APIENTRY wWinMain(
 
     // Cleanup
     ZeroElite::DMAEngine::Shutdown();
-    ZeroElite::ZeroUI::Shutdown();
+    ShutdownZeroUI();
 
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();

@@ -77,7 +77,7 @@
     <ClInclude Include="include\vmmdll.h">
       <Filter>Header Files\ZeroElite</Filter>
     </ClInclude>
-    <ClInclude Include="src\ZeroUI.h">
+    <ClInclude Include="src\ZeroUI.hpp">
       <Filter>Header Files\ZeroElite</Filter>
     </ClInclude>
     <ClInclude Include="src\DMA_Engine.h">

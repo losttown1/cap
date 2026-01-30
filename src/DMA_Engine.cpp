@@ -7,21 +7,38 @@
 #include "../include/imgui.h"
 #include <iostream>
 #include <cmath>
+#include <ctime>
+#include <cstdlib>
 #include <mutex>
 
 //=============================================================================
 // DMA Configuration
 //=============================================================================
 
-#define DMA_ENABLED 1  // Set to 1 for real DMA, 0 for simulation
+// Set to 1 for real DMA hardware, 0 for simulation/testing mode
+// NOTE: To use real DMA, you need:
+//   1. vmmdll.lib in the libs folder (x64 version)
+//   2. vmm.dll, leechcore.dll, FTD3XX.dll in the output folder
+//   3. FPGA hardware connected and drivers installed
+#define DMA_ENABLED 0
 
 #if DMA_ENABLED
-#include <vmmdll.h>
-#pragma comment(lib, "vmmdll.lib")
-static VMM_HANDLE g_hVMM = nullptr;
+    // Real DMA mode - requires VMMDLL library
+    #include "../include/vmmdll.h"
+    #pragma comment(lib, "../libs/vmmdll.lib")
+    static VMM_HANDLE g_hVMM = nullptr;
 #else
-typedef void* VMM_HANDLE;
-static VMM_HANDLE g_hVMM = nullptr;
+    // Simulation mode - no hardware required
+    typedef void* VMM_HANDLE;
+    static VMM_HANDLE g_hVMM = nullptr;
+    
+    // Stub functions for simulation
+    #define VMMDLL_Initialize(argc, argv) ((VMM_HANDLE)1)
+    #define VMMDLL_Close(h) ((void)0)
+    #define VMMDLL_MemRead(h, pid, addr, buf, size) (true)
+    #define VMMDLL_MemWrite(h, pid, addr, buf, size) (true)
+    #define VMMDLL_ProcessGetModuleBase(h, pid, name) ((ULONG64)0x140000000)
+    #define VMMDLL_PidGetFromName(h, name, pid) (*(pid) = 12345, true)
 #endif
 
 //=============================================================================
@@ -63,85 +80,101 @@ bool InitializeZeroDMA()
     std::cout << "[DMA Engine] Target Process: " << TARGET_PROCESS_NAME << std::endl;
 
 #if DMA_ENABLED
+    // Real DMA mode - connect to FPGA hardware
+    std::cout << "[DMA Engine] Mode: HARDWARE DMA" << std::endl;
+    std::cout << "[DMA Engine] Connecting to FPGA device..." << std::endl;
+    
     // Try to initialize VMMDLL with FPGA
     LPCSTR args[] = { 
         "", 
         "-device", "fpga",
-        "-v",
-        "-printf"
+        "-v"
     };
     
-    std::cout << "[DMA Engine] Connecting to FPGA device..." << std::endl;
-    
-    g_hVMM = VMMDLL_Initialize(5, (LPSTR*)args);
+    g_hVMM = VMMDLL_Initialize(4, (LPSTR*)args);
     
     if (!g_hVMM) {
         std::cerr << "[DMA Engine] Failed to initialize VMMDLL" << std::endl;
         std::cerr << "[DMA Engine] Possible causes:" << std::endl;
         std::cerr << "[DMA Engine]   - FPGA device not connected" << std::endl;
-        std::cerr << "[DMA Engine]   - Driver not installed" << std::endl;
-        std::cerr << "[DMA Engine]   - Device busy (close other DMA tools)" << std::endl;
-        std::cerr << "[DMA Engine]   - Missing vmm.dll/leechcore.dll" << std::endl;
-        return false;
+        std::cerr << "[DMA Engine]   - Driver not installed (FTD3XX)" << std::endl;
+        std::cerr << "[DMA Engine]   - Device busy - close other DMA tools" << std::endl;
+        std::cerr << "[DMA Engine]   - Missing DLLs (vmm.dll, leechcore.dll)" << std::endl;
+        std::cerr << "[DMA Engine] Falling back to simulation mode..." << std::endl;
+        goto simulation_mode;
     }
 
     std::cout << "[DMA Engine] VMMDLL initialized successfully" << std::endl;
 
     // Find the target process (cod.exe)
-    DWORD dwPID = 0;
-    if (VMMDLL_PidGetFromName(g_hVMM, (LPSTR)TARGET_PROCESS_NAME, &dwPID)) {
-        g_dwTargetPID = dwPID;
-        std::cout << "[DMA Engine] Found " << TARGET_PROCESS_NAME << " (PID: " << dwPID << ")" << std::endl;
-    } else {
-        std::cerr << "[DMA Engine] Process not found: " << TARGET_PROCESS_NAME << std::endl;
-        std::cerr << "[DMA Engine] Make sure Black Ops 6 is running" << std::endl;
-        VMMDLL_Close(g_hVMM);
-        g_hVMM = nullptr;
-        return false;
+    {
+        DWORD dwPID = 0;
+        if (VMMDLL_PidGetFromName(g_hVMM, (LPSTR)TARGET_PROCESS_NAME, &dwPID)) {
+            g_dwTargetPID = dwPID;
+            std::cout << "[DMA Engine] Found " << TARGET_PROCESS_NAME << " (PID: " << dwPID << ")" << std::endl;
+        } else {
+            std::cerr << "[DMA Engine] Process not found: " << TARGET_PROCESS_NAME << std::endl;
+            std::cerr << "[DMA Engine] Make sure Black Ops 6 is running" << std::endl;
+            std::cerr << "[DMA Engine] Continuing anyway for overlay testing..." << std::endl;
+            g_dwTargetPID = 0;
+        }
     }
 
-    // Get module base
-    g_ModuleBase = VMMDLL_ProcessGetModuleBase(g_hVMM, g_dwTargetPID, (LPSTR)TARGET_PROCESS_NAME);
-    if (g_ModuleBase) {
-        std::cout << "[DMA Engine] Module base: 0x" << std::hex << g_ModuleBase << std::dec << std::endl;
-    } else {
-        std::cout << "[DMA Engine] Warning: Could not get module base" << std::endl;
+    // Get module base if process was found
+    if (g_dwTargetPID > 0) {
+        g_ModuleBase = VMMDLL_ProcessGetModuleBase(g_hVMM, g_dwTargetPID, (LPSTR)TARGET_PROCESS_NAME);
+        if (g_ModuleBase) {
+            std::cout << "[DMA Engine] Module base: 0x" << std::hex << g_ModuleBase << std::dec << std::endl;
+        } else {
+            std::cout << "[DMA Engine] Warning: Could not get module base" << std::endl;
+        }
     }
 
     g_bConnected = true;
-    std::cout << "[DMA Engine] Connection established!" << std::endl;
+    std::cout << "[DMA Engine] DMA Connection established!" << std::endl;
+    return true;
     
-#else
-    // Simulation mode
-    std::cout << "[DMA Engine] Running in SIMULATION MODE" << std::endl;
-    std::cout << "[DMA Engine] No real DMA - using fake data for testing" << std::endl;
+simulation_mode:
+#endif
+    // Simulation mode - no hardware required
+    std::cout << "[DMA Engine] Mode: SIMULATION (No Hardware)" << std::endl;
+    std::cout << "[DMA Engine] Using fake player data for testing overlay" << std::endl;
     
+    g_hVMM = (VMM_HANDLE)1;  // Fake handle
     g_bConnected = true;
     g_dwTargetPID = 12345;
     g_ModuleBase = 0x140000000;
     
-    // Generate some fake players for testing
+    // Generate fake players for testing the radar
     g_Players.clear();
-    for (int i = 0; i < 10; i++) {
+    srand((unsigned int)time(nullptr));
+    
+    for (int i = 0; i < 12; i++) {
         PlayerData player;
         player.valid = true;
-        player.isEnemy = (i % 2 == 0);
+        player.isEnemy = (i < 6);  // First 6 are enemies
         player.health = 100 - (i * 5);
-        player.team = (i % 2);
+        player.team = player.isEnemy ? 2 : 1;
+        
+        // Random positions around the local player
+        float angle = (float)i * (360.0f / 12.0f) * 3.14159f / 180.0f;
+        float dist = 200.0f + (float)(rand() % 400);
         player.position = Vec3(
-            (float)(rand() % 2000 - 1000),
-            (float)(rand() % 2000 - 1000),
+            cosf(angle) * dist,
+            sinf(angle) * dist,
             0.0f
         );
         player.yaw = (float)(rand() % 360);
-        snprintf(player.name, sizeof(player.name), "Player%d", i + 1);
+        player.distance = dist;
+        snprintf(player.name, sizeof(player.name), "%s%d", player.isEnemy ? "Enemy" : "Team", i + 1);
         g_Players.push_back(player);
     }
     
     g_LocalPosition = Vec3(0, 0, 0);
     g_LocalYaw = 0.0f;
     g_LocalTeam = 1;
-#endif
+    
+    std::cout << "[DMA Engine] Simulation initialized with " << g_Players.size() << " fake players" << std::endl;
     
     return true;
 }

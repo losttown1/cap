@@ -331,6 +331,63 @@ enum ImGuiCond_
     ImGuiCond_Appearing     = 1 << 3,
 };
 
+enum ImGuiConfigFlags_
+{
+    ImGuiConfigFlags_None                   = 0,
+    ImGuiConfigFlags_NavEnableKeyboard      = 1 << 0,
+    ImGuiConfigFlags_NavEnableGamepad       = 1 << 1,
+    ImGuiConfigFlags_NavEnableSetMousePos   = 1 << 2,
+    ImGuiConfigFlags_NavNoCaptureKeyboard   = 1 << 3,
+    ImGuiConfigFlags_NoMouse                = 1 << 4,
+    ImGuiConfigFlags_NoMouseCursorChange    = 1 << 5,
+    ImGuiConfigFlags_IsSRGB                 = 1 << 20,
+    ImGuiConfigFlags_IsTouchScreen          = 1 << 21,
+};
+
+enum ImGuiBackendFlags_
+{
+    ImGuiBackendFlags_None                  = 0,
+    ImGuiBackendFlags_HasGamepad            = 1 << 0,
+    ImGuiBackendFlags_HasMouseCursors       = 1 << 1,
+    ImGuiBackendFlags_HasSetMousePos        = 1 << 2,
+    ImGuiBackendFlags_RendererHasVtxOffset  = 1 << 3,
+};
+
+enum ImGuiTreeNodeFlags_
+{
+    ImGuiTreeNodeFlags_None                 = 0,
+    ImGuiTreeNodeFlags_Selected             = 1 << 0,
+    ImGuiTreeNodeFlags_Framed               = 1 << 1,
+    ImGuiTreeNodeFlags_AllowItemOverlap     = 1 << 2,
+    ImGuiTreeNodeFlags_NoTreePushOnOpen     = 1 << 3,
+    ImGuiTreeNodeFlags_NoAutoOpenOnLog      = 1 << 4,
+    ImGuiTreeNodeFlags_DefaultOpen          = 1 << 5,
+    ImGuiTreeNodeFlags_OpenOnDoubleClick    = 1 << 6,
+    ImGuiTreeNodeFlags_OpenOnArrow          = 1 << 7,
+    ImGuiTreeNodeFlags_Leaf                 = 1 << 8,
+    ImGuiTreeNodeFlags_Bullet               = 1 << 9,
+    ImGuiTreeNodeFlags_FramePadding         = 1 << 10,
+    ImGuiTreeNodeFlags_SpanAvailWidth       = 1 << 11,
+    ImGuiTreeNodeFlags_SpanFullWidth        = 1 << 12,
+    ImGuiTreeNodeFlags_NavLeftJumpsBackHere = 1 << 13,
+    ImGuiTreeNodeFlags_CollapsingHeader     = ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_NoTreePushOnOpen | ImGuiTreeNodeFlags_NoAutoOpenOnLog,
+};
+
+enum ImGuiMouseCursor_
+{
+    ImGuiMouseCursor_None = -1,
+    ImGuiMouseCursor_Arrow = 0,
+    ImGuiMouseCursor_TextInput,
+    ImGuiMouseCursor_ResizeAll,
+    ImGuiMouseCursor_ResizeNS,
+    ImGuiMouseCursor_ResizeEW,
+    ImGuiMouseCursor_ResizeNESW,
+    ImGuiMouseCursor_ResizeNWSE,
+    ImGuiMouseCursor_Hand,
+    ImGuiMouseCursor_NotAllowed,
+    ImGuiMouseCursor_COUNT
+};
+
 // ImGuiStyle
 struct ImGuiStyle
 {

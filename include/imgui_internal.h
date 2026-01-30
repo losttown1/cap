@@ -80,6 +80,14 @@ IMGUI_API const char*   ImStrSkipBlank(const char* str);
 IMGUI_API int           ImFormatString(char* buf, size_t buf_size, const char* fmt, ...);
 IMGUI_API int           ImFormatStringV(char* buf, size_t buf_size, const char* fmt, va_list args);
 
+// Helpers: Scalar operations
+inline float  ImMin(float lhs, float rhs)                                { return lhs < rhs ? lhs : rhs; }
+inline float  ImMax(float lhs, float rhs)                                { return lhs >= rhs ? lhs : rhs; }
+inline float  ImClamp(float v, float mn, float mx)                       { return (v < mn) ? mn : (v > mx) ? mx : v; }
+inline int    ImMin(int lhs, int rhs)                                    { return lhs < rhs ? lhs : rhs; }
+inline int    ImMax(int lhs, int rhs)                                    { return lhs >= rhs ? lhs : rhs; }
+inline int    ImClamp(int v, int mn, int mx)                             { return (v < mn) ? mn : (v > mx) ? mx : v; }
+
 // Helpers: ImVec2/ImVec4 operators
 inline ImVec2 ImMin(const ImVec2& lhs, const ImVec2& rhs)                { return ImVec2(lhs.x < rhs.x ? lhs.x : rhs.x, lhs.y < rhs.y ? lhs.y : rhs.y); }
 inline ImVec2 ImMax(const ImVec2& lhs, const ImVec2& rhs)                { return ImVec2(lhs.x >= rhs.x ? lhs.x : rhs.x, lhs.y >= rhs.y ? lhs.y : rhs.y); }

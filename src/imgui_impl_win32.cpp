@@ -360,26 +360,10 @@ float ImGui_ImplWin32_GetDpiScaleForMonitor(void* monitor)
     return 1.0f;
 }
 
-// GET_X_LPARAM / GET_Y_LPARAM
+// GET_X_LPARAM / GET_Y_LPARAM fallback (already defined in windowsx.h)
 #ifndef GET_X_LPARAM
 #define GET_X_LPARAM(lp) ((int)(short)LOWORD(lp))
 #endif
 #ifndef GET_Y_LPARAM
 #define GET_Y_LPARAM(lp) ((int)(short)HIWORD(lp))
 #endif
-
-// Mouse cursor enum
-enum ImGuiMouseCursor_
-{
-    ImGuiMouseCursor_None = -1,
-    ImGuiMouseCursor_Arrow = 0,
-    ImGuiMouseCursor_TextInput,
-    ImGuiMouseCursor_ResizeAll,
-    ImGuiMouseCursor_ResizeNS,
-    ImGuiMouseCursor_ResizeEW,
-    ImGuiMouseCursor_ResizeNESW,
-    ImGuiMouseCursor_ResizeNWSE,
-    ImGuiMouseCursor_Hand,
-    ImGuiMouseCursor_NotAllowed,
-    ImGuiMouseCursor_COUNT
-};

@@ -119,7 +119,7 @@
     <ClInclude Include="include\imgui_impl_win32.h" />
     <ClInclude Include="include\vmmdll.h" />
     <ClInclude Include="src\ZeroUI.hpp" />
-    <ClInclude Include="src\DMA_Engine.h" />
+    <ClInclude Include="src\DMA_Engine.hpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="libs\vmmdll.lib" />

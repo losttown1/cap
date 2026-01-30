@@ -80,7 +80,7 @@
     <ClInclude Include="src\ZeroUI.hpp">
       <Filter>Header Files\ZeroElite</Filter>
     </ClInclude>
-    <ClInclude Include="src\DMA_Engine.h">
+    <ClInclude Include="src\DMA_Engine.hpp">
       <Filter>Header Files\ZeroElite</Filter>
     </ClInclude>
   </ItemGroup>

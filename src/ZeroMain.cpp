@@ -13,7 +13,7 @@
 
 // Zero Elite includes
 #include "ZeroUI.hpp"
-#include "DMA_Engine.h"
+#include "DMA_Engine.hpp"
 
 // Link DirectX and system libraries
 #pragma comment(lib, "d3d11.lib")
@@ -361,15 +361,16 @@ int APIENTRY wWinMain(
     // Initialize Zero Elite UI
     InitializeZeroUI();
 
-    // Initialize DMA Engine with target PID and handle
-    if (ZeroElite::DMAEngine::Initialize(35028, 
-                                          reinterpret_cast<HANDLE>(0x021EE040)))
+    // Initialize DMA Engine with target PID: 35028 and Handle: 0x021EE040
+    if (InitializeZeroDMA())
     {
-        std::cout << "[Zero Elite] DMA Engine initialized" << std::endl;
+        std::cout << "[PROJECT ZERO] DMA Engine initialized" << std::endl;
+        std::cout << "[PROJECT ZERO] Target PID: " << TARGET_PID << std::endl;
+        std::cout << "[PROJECT ZERO] Target Handle: 0x" << std::hex << TARGET_HANDLE << std::dec << std::endl;
     }
     else
     {
-        std::cout << "[Zero Elite] DMA Engine initialization failed (continuing without DMA)" << std::endl;
+        std::cout << "[PROJECT ZERO] DMA Engine initialization failed (continuing without DMA)" << std::endl;
     }
 
     std::cout << std::endl;
@@ -448,7 +449,7 @@ int APIENTRY wWinMain(
     std::cout << "[Zero Elite] Shutting down..." << std::endl;
 
     // Cleanup
-    ZeroElite::DMAEngine::Shutdown();
+    ShutdownZeroDMA();
     ShutdownZeroUI();
 
     ImGui_ImplDX11_Shutdown();

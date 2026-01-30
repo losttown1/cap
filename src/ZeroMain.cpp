@@ -99,9 +99,9 @@ static IDWriteTextFormat* g_FontSmall = nullptr;
 // Map texture
 static ID2D1Bitmap* g_MapTexture = nullptr;
 
-// State - MENU VISIBLE BY DEFAULT
+// State - MENU HIDDEN BY DEFAULT (press INSERT to show)
 static std::atomic<bool> g_Running(true);
-static bool g_MenuVisible = true;
+static bool g_MenuVisible = false;
 static int g_CurrentTab = 0;
 static POINT g_Mouse = {0, 0};
 static bool g_MouseDown = false;
@@ -274,8 +274,13 @@ bool CreateOverlayWindow()
     wc.lpszClassName = L"ZeroOverlay";
     RegisterClassExW(&wc);
     
+    // Create with WS_EX_TRANSPARENT initially if menu is hidden
+    DWORD exStyle = WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_NOACTIVATE;
+    if (!g_MenuVisible)
+        exStyle |= WS_EX_TRANSPARENT;
+    
     g_Hwnd = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_NOACTIVATE,
+        exStyle,
         wc.lpszClassName, L"",
         WS_POPUP,
         0, 0, g_ScreenW, g_ScreenH,
@@ -283,7 +288,8 @@ bool CreateOverlayWindow()
     
     if (!g_Hwnd) return false;
     
-    SetLayeredWindowAttributes(g_Hwnd, RGB(0, 0, 0), 255, LWA_ALPHA);
+    // Use color key for transparency (black = transparent)
+    SetLayeredWindowAttributes(g_Hwnd, RGB(0, 0, 0), 0, LWA_COLORKEY);
     
     MARGINS margins = {-1, -1, -1, -1};
     DwmExtendFrameIntoClientArea(g_Hwnd, &margins);
@@ -1071,6 +1077,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
     // Attempt pattern scanning
     PatternScanner::UpdateAllOffsets();
     
+    // Hide console window after initialization (optional - comment out to keep visible)
+    HWND consoleWnd = GetConsoleWindow();
+    if (consoleWnd)
+    {
+        ShowWindow(consoleWnd, SW_HIDE);
+    }
+    
     // Create the overlay window
     if (!CreateOverlayWindow()) 
     {
@@ -1084,6 +1097,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
         MessageBoxW(nullptr, L"Failed to initialize DirectX", L"Error", MB_OK | MB_ICONERROR);
         return 1;
     }
+    
+    // Start with menu hidden to prevent freeze - press INSERT to show
+    g_MenuVisible = false;
+    LONG_PTR style = GetWindowLongPtrW(g_Hwnd, GWL_EXSTYLE);
+    style |= WS_EX_TRANSPARENT;
+    SetWindowLongPtrW(g_Hwnd, GWL_EXSTYLE, style);
     
     // Start background threads
     std::thread inputThread(InputThread);

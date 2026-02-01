@@ -432,3 +432,4 @@ extern bool AutoDetectKMBox();
 extern const char* GetKMBoxStatus();
 extern bool IsKMBoxConnected();
 extern bool IsHardwareScanComplete();
+extern bool IsDMAOnline();

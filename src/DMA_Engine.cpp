@@ -1,5 +1,5 @@
-// DMA_Engine.cpp - STRICT AUTOMATION v4.3
-// Black Stage -> Hardware Scan -> Transparent -> Menu
+// DMA_Engine.cpp - REAL DMA DATA ONLY v4.4
+// No Fake Data - Real Hardware Sync - Black Stage First
 
 #include "DMA_Engine.hpp"
 #include <cstring>
@@ -31,13 +31,13 @@ static DWORD g_GamePID = 0;
 #endif
 
 // ============================================================================
-// HARDWARE STATUS (Global Atomics)
+// HARDWARE STATUS
 // ============================================================================
 static std::atomic<bool> g_DMA_Online_Internal(false);
 static std::atomic<bool> g_KMBox_Locked_Internal(false);
 static std::atomic<bool> g_HardwareScanDone_Internal(false);
-static char g_DMA_StatusStr[32] = "SCANNING...";
-static char g_KMBox_StatusStr[32] = "SCANNING...";
+static char g_DMA_StatusStr[32] = "OFFLINE";
+static char g_KMBox_StatusStr[32] = "NOT FOUND";
 static char g_LockedCOMPort[16] = "";
 
 // ============================================================================
@@ -62,8 +62,8 @@ bool DMAEngine::s_SimulationMode = false;
 bool DMAEngine::s_UsingFTD3XX = false;
 uintptr_t DMAEngine::s_BaseAddress = 0;
 size_t DMAEngine::s_ModuleSize = 0;
-char DMAEngine::s_StatusText[64] = "INITIALIZING";
-char DMAEngine::s_DeviceInfo[128] = "Scanning...";
+char DMAEngine::s_StatusText[64] = "OFFLINE";
+char DMAEngine::s_DeviceInfo[128] = "Not Connected";
 char DMAEngine::s_DriverMode[32] = "Auto";
 
 bool PatternScanner::s_Scanned = false;
@@ -99,7 +99,7 @@ int Aimbot::s_CurrentTarget = -1;
 Vec2 Aimbot::s_LastAimPos = {0, 0};
 
 // ============================================================================
-// LOGGER - SILENT (NO CONSOLE)
+// LOGGER - SILENT
 // ============================================================================
 void Logger::Initialize() { s_Initialized = true; }
 void Logger::Shutdown() { s_Initialized = false; }
@@ -122,12 +122,12 @@ void Logger::LogSpinner(const char*, int) {}
 void Logger::ClearLine() {}
 
 // ============================================================================
-// INIT DMA - Called from main()
+// INIT DMA - REAL HARDWARE CHECK
 // ============================================================================
 bool InitDMA()
 {
 #if DMA_ENABLED
-    // Try to initialize FPGA device
+    // Initialize FPGA device
     char arg0[] = "";
     char arg1[] = "-device";
     char arg2[] = "fpga";
@@ -135,46 +135,66 @@ bool InitDMA()
     
     g_VMMHandle = VMMDLL_Initialize(3, args);
     
-    if (g_VMMHandle != NULL)
+    if (g_VMMHandle == NULL)
     {
-        g_DMA_Online_Internal = true;
-        strcpy_s(g_DMA_StatusStr, "ONLINE");
-        strcpy_s(DMAEngine::s_StatusText, "ONLINE");
-        strcpy_s(DMAEngine::s_DeviceInfo, "FPGA Connected");
-        DMAEngine::s_Connected = true;
-        DMAEngine::s_Online = true;
+        // DMA HARDWARE NOT RESPONDING
+        g_DMA_Online_Internal = false;
+        strcpy_s(g_DMA_StatusStr, "OFFLINE");
+        strcpy_s(DMAEngine::s_StatusText, "OFFLINE");
+        strcpy_s(DMAEngine::s_DeviceInfo, "DMA HARDWARE NOT RESPONDING");
+        DMAEngine::s_Connected = false;
+        DMAEngine::s_Online = false;
+        return false;
+    }
+    
+    // DMA ONLINE
+    g_DMA_Online_Internal = true;
+    strcpy_s(g_DMA_StatusStr, "ONLINE");
+    strcpy_s(DMAEngine::s_StatusText, "ONLINE");
+    strcpy_s(DMAEngine::s_DeviceInfo, "FPGA Connected");
+    DMAEngine::s_Connected = true;
+    DMAEngine::s_Online = true;
+    
+    // Find game process
+    DWORD pid = 0;
+    if (VMMDLL_PidGetFromName(g_VMMHandle, (LPSTR)"cod.exe", &pid) && pid != 0)
+    {
+        g_GamePID = pid;
+        DMAEngine::s_BaseAddress = 0x140000000;
+        g_InitStatus.gameFound = true;
         
-        // Try to find game process
-        DWORD pid = 0;
-        if (VMMDLL_PidGetFromName(g_VMMHandle, (LPSTR)"cod.exe", &pid) && pid != 0)
+        // Set default offsets
+        g_Offsets.EntityList = DMAEngine::s_BaseAddress + 0x16D5C000;
+        g_Offsets.ClientInfo = DMAEngine::s_BaseAddress + 0x16D58000;
+        g_Offsets.LocalPlayer = DMAEngine::s_BaseAddress + 0x16D5A000;
+    }
+    else
+    {
+        // Try BlackOps6.exe
+        if (VMMDLL_PidGetFromName(g_VMMHandle, (LPSTR)"BlackOps6.exe", &pid) && pid != 0)
         {
             g_GamePID = pid;
             DMAEngine::s_BaseAddress = 0x140000000;
             g_InitStatus.gameFound = true;
+            g_Offsets.EntityList = DMAEngine::s_BaseAddress + 0x16D5C000;
         }
-        
-        return true;
     }
-#endif
     
-    // Simulation mode
+    return true;
+#else
     g_DMA_Online_Internal = false;
-    strcpy_s(g_DMA_StatusStr, "SIMULATION");
-    strcpy_s(DMAEngine::s_StatusText, "SIMULATION");
-    DMAEngine::s_SimulationMode = true;
-    DMAEngine::s_BaseAddress = 0x140000000;
-    g_Offsets.EntityList = DMAEngine::s_BaseAddress + 0x16D5C000;
-    
+    strcpy_s(g_DMA_StatusStr, "OFFLINE");
     return false;
+#endif
 }
 
 // ============================================================================
-// AUTO-DETECT KMBOX - Scans all COM ports automatically
+// AUTO-DETECT KMBOX - REAL HARDWARE PING
 // ============================================================================
 bool AutoDetectKMBox()
 {
 #ifdef _WIN32
-    // First try to load saved config
+    // Try saved config first
     std::ifstream configFile("config.ini");
     if (configFile.is_open())
     {
@@ -217,22 +237,36 @@ bool AutoDetectKMBox()
                 timeouts.ReadTotalTimeoutConstant = 100;
                 SetCommTimeouts(hPort, &timeouts);
                 
-                HardwareController::s_Handle = hPort;
-                HardwareController::s_Connected = true;
-                HardwareController::s_Type = ControllerType::KMBOX_B_PLUS;
-                strcpy_s(HardwareController::s_LockedPort, savedPort);
-                strcpy_s(g_LockedCOMPort, savedPort);
-                snprintf(HardwareController::s_DeviceName, sizeof(HardwareController::s_DeviceName),
-                         "KMBox [%s]", savedPort);
-                g_KMBox_Locked_Internal = true;
-                strcpy_s(g_KMBox_StatusStr, "AUTO-LOCKED");
+                // Send ping to verify device is alive
+                PurgeComm(hPort, PURGE_RXCLEAR | PURGE_TXCLEAR);
+                const char* ping = "km.version()\r\n";
+                DWORD written = 0;
+                WriteFile(hPort, ping, (DWORD)strlen(ping), &written, nullptr);
+                Sleep(100);
                 
-                return true;
+                char response[64] = {};
+                DWORD bytesRead = 0;
+                ReadFile(hPort, response, sizeof(response) - 1, &bytesRead, nullptr);
+                
+                if (bytesRead > 0)
+                {
+                    HardwareController::s_Handle = hPort;
+                    HardwareController::s_Connected = true;
+                    HardwareController::s_Type = ControllerType::KMBOX_B_PLUS;
+                    strcpy_s(HardwareController::s_LockedPort, savedPort);
+                    strcpy_s(g_LockedCOMPort, savedPort);
+                    snprintf(HardwareController::s_DeviceName, sizeof(HardwareController::s_DeviceName),
+                             "KMBox [%s]", savedPort);
+                    g_KMBox_Locked_Internal = true;
+                    strcpy_s(g_KMBox_StatusStr, "CONNECTED");
+                    return true;
+                }
+                CloseHandle(hPort);
             }
         }
     }
     
-    // Scan all COM ports (1-20)
+    // Scan all COM ports (1-20) and PING each one
     for (int portNum = 1; portNum <= 20; portNum++)
     {
         char fullPath[32];
@@ -244,7 +278,6 @@ bool AutoDetectKMBox()
         if (hPort == INVALID_HANDLE_VALUE)
             continue;
         
-        // Configure serial port
         DCB dcb = {};
         dcb.DCBlength = sizeof(DCB);
         GetCommState(hPort, &dcb);
@@ -267,24 +300,23 @@ bool AutoDetectKMBox()
         timeouts.ReadTotalTimeoutMultiplier = 10;
         SetCommTimeouts(hPort, &timeouts);
         
-        // Clear buffers
         PurgeComm(hPort, PURGE_RXCLEAR | PURGE_TXCLEAR);
         
-        // Send handshake
+        // SEND HANDSHAKE PING
         const char* handshake = "km.version()\r\n";
         DWORD written = 0;
         WriteFile(hPort, handshake, (DWORD)strlen(handshake), &written, nullptr);
         
         Sleep(100);
         
-        // Read response
+        // CHECK IF DEVICE REPLIES
         char response[128] = {};
         DWORD bytesRead = 0;
         ReadFile(hPort, response, sizeof(response) - 1, &bytesRead, nullptr);
         
         if (bytesRead > 0)
         {
-            // Device responded - LOCK IT
+            // DEVICE REPLIED - LOCK IT
             char portName[16];
             snprintf(portName, sizeof(portName), "COM%d", portNum);
             
@@ -296,9 +328,9 @@ bool AutoDetectKMBox()
             snprintf(HardwareController::s_DeviceName, sizeof(HardwareController::s_DeviceName),
                      "KMBox [%s]", portName);
             g_KMBox_Locked_Internal = true;
-            strcpy_s(g_KMBox_StatusStr, "AUTO-LOCKED");
+            strcpy_s(g_KMBox_StatusStr, "CONNECTED");
             
-            // Save to config for next time
+            // Save for next time
             std::ofstream saveFile("config.ini");
             if (saveFile.is_open())
             {
@@ -314,32 +346,22 @@ bool AutoDetectKMBox()
     }
 #endif
     
-    // No device found
+    // NO DEVICE FOUND
     g_KMBox_Locked_Internal = false;
     strcpy_s(g_KMBox_StatusStr, "NOT FOUND");
     return false;
 }
 
 // ============================================================================
-// EXTERNAL STATUS FUNCTIONS
+// EXTERNAL STATUS
 // ============================================================================
-const char* GetKMBoxStatus()
-{
-    return g_KMBox_StatusStr;
-}
-
-bool IsKMBoxConnected()
-{
-    return g_KMBox_Locked_Internal.load();
-}
-
-bool IsHardwareScanComplete()
-{
-    return g_HardwareScanDone_Internal.load();
-}
+const char* GetKMBoxStatus() { return g_KMBox_StatusStr; }
+bool IsKMBoxConnected() { return g_KMBox_Locked_Internal.load(); }
+bool IsHardwareScanComplete() { return g_HardwareScanDone_Internal.load(); }
+bool IsDMAOnline() { return g_DMA_Online_Internal.load(); }
 
 // ============================================================================
-// SCATTER READS - FIXED C2664 ERROR
+// SCATTER READS - FIXED C2664
 // ============================================================================
 void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
 {
@@ -354,12 +376,11 @@ void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
         return;
     }
     
-    // FIXED: Use PVMMDLL_SCATTER_HANDLE (pointer type)
+    // FIXED: PVMMDLL_SCATTER_HANDLE is pointer type
     PVMMDLL_SCATTER_HANDLE hScatter = VMMDLL_Scatter_Initialize(g_VMMHandle, g_GamePID, VMMDLL_FLAG_NOCACHE);
     
     if (hScatter == NULL)
     {
-        // Fallback to individual reads
         for (auto& e : entries)
         {
             if (e.buffer && e.address != 0 && e.size > 0)
@@ -371,14 +392,12 @@ void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
         return;
     }
     
-    // Prepare scatter reads
     for (auto& e : entries)
     {
         if (e.address != 0 && e.size > 0 && e.size <= 0x10000)
             VMMDLL_Scatter_Prepare(hScatter, e.address, (DWORD)e.size);
     }
     
-    // Execute batch read
     if (!VMMDLL_Scatter_Execute(hScatter))
     {
         VMMDLL_Scatter_CloseHandle(hScatter);
@@ -388,7 +407,6 @@ void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
         return;
     }
     
-    // Read results
     for (auto& e : entries)
     {
         if (e.buffer && e.address != 0 && e.size > 0)
@@ -409,19 +427,12 @@ void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
 // ============================================================================
 // HARDWARE CONTROLLER
 // ============================================================================
-bool HardwareController::Initialize()
-{
-    return AutoDetectKMBox();
-}
+bool HardwareController::Initialize() { return AutoDetectKMBox(); }
 
 void HardwareController::Shutdown()
 {
 #ifdef _WIN32
-    if (s_Handle)
-    {
-        CloseHandle(s_Handle);
-        s_Handle = nullptr;
-    }
+    if (s_Handle) { CloseHandle(s_Handle); s_Handle = nullptr; }
 #endif
     s_Connected = false;
     g_KMBox_Locked_Internal = false;
@@ -464,28 +475,20 @@ bool HardwareController::SocketSend(const char*, int) { return false; }
 // ============================================================================
 // DMA ENGINE
 // ============================================================================
-bool DMAEngine::Initialize()
-{
-    return InitDMA();
-}
-
+bool DMAEngine::Initialize() { return InitDMA(); }
 bool DMAEngine::InitializeWithConfig(const DMAConfig&) { return Initialize(); }
 bool DMAEngine::InitializeFTD3XX() { return Initialize(); }
 
 void DMAEngine::Shutdown()
 {
 #if DMA_ENABLED
-    if (g_VMMHandle)
-    {
-        VMMDLL_Close(g_VMMHandle);
-        g_VMMHandle = nullptr;
-    }
+    if (g_VMMHandle) { VMMDLL_Close(g_VMMHandle); g_VMMHandle = nullptr; }
 #endif
     HardwareController::Shutdown();
 }
 
 bool DMAEngine::IsConnected() { return s_Connected || g_DMA_Online_Internal.load(); }
-bool DMAEngine::IsOnline() { return s_Online || s_SimulationMode || g_InitStatus.allChecksPassed; }
+bool DMAEngine::IsOnline() { return s_Online || g_DMA_Online_Internal.load(); }
 const char* DMAEngine::GetStatus() { return g_DMA_StatusStr; }
 const char* DMAEngine::GetDeviceInfo() { return s_DeviceInfo; }
 const char* DMAEngine::GetDriverMode() { return s_DriverMode; }
@@ -528,7 +531,6 @@ uintptr_t DMAEngine::GetBaseAddress() { return s_BaseAddress; }
 uintptr_t DMAEngine::GetModuleBase(const wchar_t*) { return s_BaseAddress; }
 size_t DMAEngine::GetModuleSize() { return s_ModuleSize; }
 
-// Template instantiations
 template int32_t DMAEngine::Read<int32_t>(uintptr_t);
 template uint32_t DMAEngine::Read<uint32_t>(uintptr_t);
 template int64_t DMAEngine::Read<int64_t>(uintptr_t);
@@ -539,10 +541,7 @@ template uintptr_t DMAEngine::Read<uintptr_t>(uintptr_t);
 // ============================================================================
 // OFFSET UPDATER
 // ============================================================================
-void OffsetUpdater::SetOffsetURL(const char* url)
-{
-    strncpy_s(s_OffsetURL, url, sizeof(s_OffsetURL) - 1);
-}
+void OffsetUpdater::SetOffsetURL(const char* url) { strncpy_s(s_OffsetURL, url, sizeof(s_OffsetURL) - 1); }
 
 bool OffsetUpdater::HttpGet(const char* url, std::string& response)
 {
@@ -561,7 +560,7 @@ bool OffsetUpdater::HttpGet(const char* url, std::string& response)
     
     if (!WinHttpCrackUrl(urlW, 0, 0, &urlComp)) return false;
     
-    HINTERNET hSession = WinHttpOpen(L"ZeroElite/4.3", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, nullptr, nullptr, 0);
+    HINTERNET hSession = WinHttpOpen(L"ZeroElite/4.4", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, nullptr, nullptr, 0);
     if (!hSession) return false;
     
     DWORD timeout = 3000;
@@ -577,9 +576,7 @@ bool OffsetUpdater::HttpGet(const char* url, std::string& response)
     if (!WinHttpSendRequest(hRequest, nullptr, 0, nullptr, 0, 0, 0) ||
         !WinHttpReceiveResponse(hRequest, nullptr))
     {
-        WinHttpCloseHandle(hRequest);
-        WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
+        WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
         return false;
     }
     
@@ -591,13 +588,10 @@ bool OffsetUpdater::HttpGet(const char* url, std::string& response)
         response += buffer;
     }
     
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
+    WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
     return !response.empty();
 #else
-    (void)url;
-    response = "";
+    (void)url; response = "";
     return false;
 #endif
 }
@@ -612,19 +606,11 @@ bool OffsetUpdater::UpdateOffsetsFromServer()
 
 bool OffsetUpdater::SyncWithCloud(int maxRetries, int retryDelayMs)
 {
-    if (s_OffsetURL[0] == 0)
-        strcpy_s(s_OffsetURL, DEFAULT_OFFSET_URL);
-    
+    if (s_OffsetURL[0] == 0) strcpy_s(s_OffsetURL, DEFAULT_OFFSET_URL);
     for (int i = 0; i < maxRetries; i++)
     {
-        if (UpdateOffsetsFromServer())
-        {
-            s_Synced = true;
-            s_Updated = true;
-            return true;
-        }
-        if (i < maxRetries - 1)
-            std::this_thread::sleep_for(std::chrono::milliseconds(retryDelayMs));
+        if (UpdateOffsetsFromServer()) { s_Synced = true; s_Updated = true; return true; }
+        if (i < maxRetries - 1) std::this_thread::sleep_for(std::chrono::milliseconds(retryDelayMs));
     }
     return false;
 }
@@ -635,32 +621,23 @@ bool OffsetUpdater::ParseOffsetsTXT(const char* txtData)
 {
     RemoteOffsets offsets = {};
     int foundCount = 0;
-    
     std::istringstream stream(txtData);
     std::string line;
     
     while (std::getline(stream, line))
     {
-        if (line.empty() || line[0] == ';' || line[0] == '#' || line[0] == '[')
-            continue;
-        
+        if (line.empty() || line[0] == ';' || line[0] == '#' || line[0] == '[') continue;
         size_t eq = line.find('=');
         if (eq == std::string::npos) continue;
         
         std::string key = line.substr(0, eq);
         std::string value = line.substr(eq + 1);
-        
-        // Trim
         while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
         while (!value.empty() && value[0] == ' ') value.erase(0, 1);
         while (!value.empty() && (value.back() == '\r' || value.back() == '\n' || value.back() == ' ')) value.pop_back();
-        
         if (key.empty() || value.empty()) continue;
         
-        uintptr_t val = (value.find("0x") == 0) ?
-            strtoull(value.c_str(), nullptr, 16) :
-            strtoull(value.c_str(), nullptr, 10);
-        
+        uintptr_t val = (value.find("0x") == 0) ? strtoull(value.c_str(), nullptr, 16) : strtoull(value.c_str(), nullptr, 10);
         std::string keyLower = key;
         for (auto& c : keyLower) c = (char)tolower(c);
         
@@ -671,12 +648,7 @@ bool OffsetUpdater::ParseOffsetsTXT(const char* txtData)
     }
     
     offsets.valid = (foundCount > 0);
-    if (offsets.valid)
-    {
-        s_LastOffsets = offsets;
-        s_Updated = true;
-        return ApplyOffsets(offsets);
-    }
+    if (offsets.valid) { s_LastOffsets = offsets; s_Updated = true; return ApplyOffsets(offsets); }
     return false;
 }
 
@@ -699,21 +671,11 @@ bool OffsetUpdater::ApplyOffsets(const RemoteOffsets& o)
 bool ProfessionalInit::RunProfessionalChecks()
 {
     memset(&g_InitStatus, 0, sizeof(g_InitStatus));
-    
-    // DMA
-    if (InitDMA())
-        g_InitStatus.dmaConnected = true;
-    
-    // KMBox
-    if (AutoDetectKMBox())
-        g_InitStatus.controllerConnected = true;
-    
-    // Cloud sync in background
+    g_InitStatus.dmaConnected = InitDMA();
+    g_InitStatus.controllerConnected = AutoDetectKMBox();
     std::thread([]() { OffsetUpdater::SyncWithCloud(2, 1000); }).detach();
-    
     g_HardwareScanDone_Internal = true;
     g_InitStatus.allChecksPassed = true;
-    
     return true;
 }
 
@@ -730,9 +692,7 @@ void ProfessionalInit::GetMouseState(char* b, size_t s) { snprintf(b, s, "Ready"
 void ScatterReadRegistry::RegisterPlayerData(int idx, uintptr_t base)
 {
     if (idx < 0 || base == 0) return;
-    while ((int)m_PlayerBuffers.size() <= idx)
-        m_PlayerBuffers.push_back({});
-    
+    while ((int)m_PlayerBuffers.size() <= idx) m_PlayerBuffers.push_back({});
     auto& buf = m_PlayerBuffers[idx];
     m_Entries.push_back({base + GameOffsets::EntityPos, &buf.position, sizeof(Vec3), ScatterDataType::PLAYER_POSITION, idx});
     m_Entries.push_back({base + GameOffsets::EntityHealth, &buf.health, sizeof(int), ScatterDataType::PLAYER_HEALTH, idx});
@@ -747,58 +707,25 @@ void ScatterReadRegistry::RegisterLocalPlayer(uintptr_t base)
     m_Entries.push_back({base + GameOffsets::EntityYaw, &m_LocalYaw, sizeof(float), ScatterDataType::LOCAL_YAW, -1});
 }
 
-void ScatterReadRegistry::RegisterViewMatrix(uintptr_t addr)
-{
-    if (addr)
-        m_Entries.push_back({addr, &m_ViewMatrix, sizeof(Matrix4x4), ScatterDataType::VIEW_MATRIX, -1});
-}
-
-void ScatterReadRegistry::RegisterCustomRead(uintptr_t addr, void* buf, size_t size)
-{
-    if (addr && buf && size)
-        m_Entries.push_back({addr, buf, size, ScatterDataType::CUSTOM, -1});
-}
-
-void ScatterReadRegistry::ExecuteAll()
-{
-    if (!m_Entries.empty())
-    {
-        m_TransactionCount++;
-        ExecuteScatterReads(m_Entries);
-    }
-}
-
+void ScatterReadRegistry::RegisterViewMatrix(uintptr_t addr) { if (addr) m_Entries.push_back({addr, &m_ViewMatrix, sizeof(Matrix4x4), ScatterDataType::VIEW_MATRIX, -1}); }
+void ScatterReadRegistry::RegisterCustomRead(uintptr_t addr, void* buf, size_t size) { if (addr && buf && size) m_Entries.push_back({addr, buf, size, ScatterDataType::CUSTOM, -1}); }
+void ScatterReadRegistry::ExecuteAll() { if (!m_Entries.empty()) { m_TransactionCount++; ExecuteScatterReads(m_Entries); } }
 void ScatterReadRegistry::Clear() { m_Entries.clear(); }
-
-int ScatterReadRegistry::GetTotalBytes() const
-{
-    int total = 0;
-    for (auto& e : m_Entries) total += (int)e.size;
-    return total;
-}
+int ScatterReadRegistry::GetTotalBytes() const { int t = 0; for (auto& e : m_Entries) t += (int)e.size; return t; }
 
 // ============================================================================
-// MAP TEXTURE MANAGER
+// MAP TEXTURE
 // ============================================================================
 void MapTextureManager::InitializeMapDatabase() {}
 bool MapTextureManager::LoadMapConfig(const char* n) { strcpy_s(s_CurrentMap.name, n); return false; }
 bool MapTextureManager::LoadMapTexture(const char* p) { if (p && p[0]) { strcpy_s(s_CurrentMap.imagePath, p); return true; } return false; }
-
-Vec2 MapTextureManager::GameToMapCoords(const Vec3& g)
-{
-    return Vec2(g.x, g.y);
-}
-
+Vec2 MapTextureManager::GameToMapCoords(const Vec3& g) { return Vec2(g.x, g.y); }
 Vec2 MapTextureManager::GameToRadarCoords(const Vec3& g, const Vec3& l, float y, float cx, float cy, float s, float z)
 {
-    Vec3 d = g - l;
-    float r = -y * 3.14159f / 180.0f;
-    return Vec2(
-        cx + (d.x * cosf(r) - d.y * sinf(r)) * (s * 0.4f) / (100.0f / z),
-        cy - (d.x * sinf(r) + d.y * cosf(r)) * (s * 0.4f) / (100.0f / z)
-    );
+    Vec3 d = g - l; float r = -y * 3.14159f / 180.0f;
+    return Vec2(cx + (d.x * cosf(r) - d.y * sinf(r)) * (s * 0.4f) / (100.0f / z),
+                cy - (d.x * sinf(r) + d.y * cosf(r)) * (s * 0.4f) / (100.0f / z));
 }
-
 void MapTextureManager::SetMapBounds(const char*, float, float, float, float) {}
 
 // ============================================================================
@@ -845,77 +772,131 @@ float DiagnosticSystem::MeasureReadSpeed(uintptr_t, size_t, int) { return 0; }
 int DiagnosticSystem::MeasureLatency(uintptr_t, int) { return 0; }
 
 // ============================================================================
-// PLAYER MANAGER
+// PLAYER MANAGER - REAL DMA DATA ONLY (NO FAKE)
 // ============================================================================
 void PlayerManager::Initialize()
 {
     std::lock_guard<std::mutex> lock(s_Mutex);
     s_Players.clear();
-    
-    // Create simulated players
-    for (int i = 0; i < 12; i++)
-    {
-        PlayerData p = {};
-        p.valid = true;
-        p.index = i;
-        p.isEnemy = (i < 6);
-        p.isAlive = true;
-        p.health = 50 + rand() % 50;
-        p.maxHealth = 100;
-        p.team = p.isEnemy ? 1 : 2;
-        sprintf_s(p.name, "Player_%d", i + 1);
-        
-        float angle = (float)i * 0.5236f;
-        float dist = 30.0f + (float)(rand() % 80);
-        p.origin.x = cosf(angle) * dist;
-        p.origin.y = sinf(angle) * dist;
-        p.origin.z = 0;
-        p.yaw = (float)(rand() % 360);
-        p.distance = dist;
-        
-        s_Players.push_back(p);
-    }
-    
+    s_Players.reserve(155); // Max players in COD
     s_LocalPlayer = {};
-    s_LocalPlayer.valid = true;
-    s_LocalPlayer.health = 100;
+    s_LocalPlayer.valid = false;
     s_Initialized = true;
 }
 
 void PlayerManager::Update()
 {
     if (!s_Initialized) Initialize();
-    SimulateUpdate();
+    RealUpdate(); // ONLY REAL DMA DATA
 }
 
 void PlayerManager::UpdateWithScatterRegistry()
 {
-    if (!s_Initialized) Initialize();
-    SimulateUpdate();
+    RealUpdate();
 }
 
 void PlayerManager::SimulateUpdate()
 {
-    std::lock_guard<std::mutex> lock(s_Mutex);
-    s_SimTime += 1.0f / 60.0f;
-    s_LocalPlayer.yaw = fmodf(s_SimTime * 15.0f, 360.0f);
-    
-    for (size_t i = 0; i < s_Players.size(); i++)
-    {
-        PlayerData& p = s_Players[i];
-        float angle = (float)i * 0.5236f + s_SimTime * 0.3f;
-        float dist = 40.0f + sinf(s_SimTime * 0.5f + (float)i) * 30.0f;
-        
-        p.origin.x = cosf(angle) * dist;
-        p.origin.y = sinf(angle) * dist;
-        p.yaw = fmodf(angle * 57.3f + 180.0f, 360.0f);
-        p.distance = dist;
-        p.health = 30 + (int)(sinf(s_SimTime * 0.2f + (float)i) * 35 + 35);
-        p.valid = !(p.origin.x == 0 && p.origin.y == 0);
-    }
+    // REMOVED - NO FAKE DATA
 }
 
-void PlayerManager::RealUpdate() { UpdateWithScatterRegistry(); }
+void PlayerManager::RealUpdate()
+{
+    // ONLY USE REAL DMA DATA
+    if (!g_DMA_Online_Internal.load())
+    {
+        // DMA OFFLINE - RADAR STAYS EMPTY
+        std::lock_guard<std::mutex> lock(s_Mutex);
+        s_Players.clear();
+        s_LocalPlayer.valid = false;
+        return;
+    }
+    
+#if DMA_ENABLED
+    if (g_VMMHandle == NULL || g_GamePID == 0)
+    {
+        std::lock_guard<std::mutex> lock(s_Mutex);
+        s_Players.clear();
+        s_LocalPlayer.valid = false;
+        return;
+    }
+    
+    std::lock_guard<std::mutex> lock(s_Mutex);
+    
+    // Read LocalPlayer
+    if (g_Offsets.LocalPlayer != 0)
+    {
+        uintptr_t localAddr = DMAEngine::Read<uintptr_t>(g_Offsets.LocalPlayer);
+        if (localAddr != 0)
+        {
+            DMAEngine::ReadBuffer(localAddr + GameOffsets::EntityPos, &s_LocalPlayer.origin, sizeof(Vec3));
+            s_LocalPlayer.yaw = DMAEngine::Read<float>(localAddr + GameOffsets::EntityYaw);
+            s_LocalPlayer.health = DMAEngine::Read<int>(localAddr + GameOffsets::EntityHealth);
+            s_LocalPlayer.team = DMAEngine::Read<int>(localAddr + GameOffsets::EntityTeam);
+            s_LocalPlayer.valid = true;
+        }
+    }
+    
+    // Read EntityList
+    s_Players.clear();
+    
+    if (g_Offsets.EntityList == 0)
+        return;
+    
+    // Prepare scatter reads for all players
+    g_ScatterRegistry.Clear();
+    
+    constexpr int MAX_PLAYERS = 155;
+    constexpr uintptr_t ENTITY_SIZE = 0x568;
+    
+    for (int i = 0; i < MAX_PLAYERS; i++)
+    {
+        uintptr_t entityAddr = g_Offsets.EntityList + (i * ENTITY_SIZE);
+        g_ScatterRegistry.RegisterPlayerData(i, entityAddr);
+    }
+    
+    g_ScatterRegistry.ExecuteAll();
+    
+    auto& buffers = g_ScatterRegistry.GetPlayerBuffers();
+    
+    for (int i = 0; i < (int)buffers.size() && i < MAX_PLAYERS; i++)
+    {
+        auto& buf = buffers[i];
+        
+        // Skip invalid players
+        if (buf.position.x == 0 && buf.position.y == 0 && buf.position.z == 0)
+            continue;
+        
+        if (buf.health <= 0 || buf.health > 300)
+            continue;
+        
+        PlayerData p = {};
+        p.valid = true;
+        p.index = i;
+        p.origin = buf.position;
+        p.yaw = buf.yaw;
+        p.health = buf.health;
+        p.maxHealth = 100;
+        p.team = buf.team;
+        p.isAlive = (buf.health > 0);
+        p.isEnemy = (buf.team != s_LocalPlayer.team);
+        
+        // Calculate distance
+        Vec3 diff = p.origin - s_LocalPlayer.origin;
+        p.distance = sqrtf(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z);
+        
+        sprintf_s(p.name, "Player_%d", i);
+        
+        s_Players.push_back(p);
+    }
+#else
+    // DMA DISABLED - RADAR EMPTY
+    std::lock_guard<std::mutex> lock(s_Mutex);
+    s_Players.clear();
+    s_LocalPlayer.valid = false;
+#endif
+}
+
 std::vector<PlayerData>& PlayerManager::GetPlayers() { return s_Players; }
 PlayerData& PlayerManager::GetLocalPlayer() { return s_LocalPlayer; }
 int PlayerManager::GetAliveCount() { int c = 0; for (auto& p : s_Players) if (p.valid && p.isAlive) c++; return c; }
@@ -924,36 +905,8 @@ int PlayerManager::GetEnemyCount() { int c = 0; for (auto& p : s_Players) if (p.
 // ============================================================================
 // UTILITIES
 // ============================================================================
-bool WorldToScreen(const Vec3&, Vec2& s, int w, int h)
-{
-    s = Vec2((float)w / 2, (float)h / 2);
-    return true;
-}
-
-bool WorldToRadar(const Vec3& w, const Vec3& l, float y, Vec2& r, float cx, float cy, float s)
-{
-    r = MapTextureManager::GameToRadarCoords(w, l, y, cx, cy, s * 2, 1);
-    return true;
-}
-
-float GetFOVTo(const Vec2& c, const Vec2& t)
-{
-    return sqrtf((t.x - c.x) * (t.x - c.x) + (t.y - c.y) * (t.y - c.y));
-}
-
-Vec3 CalcAngle(const Vec3& s, const Vec3& d)
-{
-    Vec3 delta = d - s;
-    float h = sqrtf(delta.x * delta.x + delta.y * delta.y);
-    return Vec3(-atan2f(delta.z, h) * 57.3f, atan2f(delta.y, delta.x) * 57.3f, 0);
-}
-
-void SmoothAngle(Vec3& c, const Vec3& t, float s)
-{
-    if (s <= 0) s = 1;
-    Vec3 d = t - c;
-    while (d.y > 180) d.y -= 360;
-    while (d.y < -180) d.y += 360;
-    c.x += d.x / s;
-    c.y += d.y / s;
-}
+bool WorldToScreen(const Vec3&, Vec2& s, int w, int h) { s = Vec2((float)w/2, (float)h/2); return true; }
+bool WorldToRadar(const Vec3& w, const Vec3& l, float y, Vec2& r, float cx, float cy, float s) { r = MapTextureManager::GameToRadarCoords(w, l, y, cx, cy, s*2, 1); return true; }
+float GetFOVTo(const Vec2& c, const Vec2& t) { return sqrtf((t.x-c.x)*(t.x-c.x) + (t.y-c.y)*(t.y-c.y)); }
+Vec3 CalcAngle(const Vec3& s, const Vec3& d) { Vec3 delta = d - s; float h = sqrtf(delta.x*delta.x + delta.y*delta.y); return Vec3(-atan2f(delta.z, h)*57.3f, atan2f(delta.y, delta.x)*57.3f, 0); }
+void SmoothAngle(Vec3& c, const Vec3& t, float s) { if (s <= 0) s = 1; Vec3 d = t - c; while (d.y > 180) d.y -= 360; while (d.y < -180) d.y += 360; c.x += d.x/s; c.y += d.y/s; }

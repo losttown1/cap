@@ -1,5 +1,5 @@
-// ZeroMain.cpp - STRICT AUTOMATION v4.3
-// Exact Architecture: Black Stage -> Hardware Scan -> Transparent -> Menu
+// ZeroMain.cpp - REAL DMA DATA ONLY v4.4
+// No Fake Data - Black Stage - Real Hardware Sync
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -27,24 +27,24 @@ extern bool IsKMBoxConnected();
 extern bool IsHardwareScanComplete();
 extern bool InitDMA();
 extern bool AutoDetectKMBox();
+extern bool IsDMAOnline();
 
 // ============================================================================
-// GLOBAL STATE
+// HARDWARE STATUS ATOMS
 // ============================================================================
 static std::atomic<bool> g_DMA_Online(false);
 static std::atomic<bool> g_KMBox_Locked(false);
-static std::atomic<bool> g_HardwareScanDone(false);
-static std::atomic<bool> g_OverlayTransparent(false);
+static std::atomic<bool> g_HWScanDone(false);
 
 // ============================================================================
 // OVERLAY WINDOW
 // ============================================================================
 static HWND g_BlackOverlay = nullptr;
-static int g_ScreenWidth = 0;
-static int g_ScreenHeight = 0;
+static int g_ScreenW = 0;
+static int g_ScreenH = 0;
 
 // ============================================================================
-// DIRECTX & DIRECT2D
+// DIRECTX
 // ============================================================================
 static ID3D11Device* g_Device = nullptr;
 static ID3D11DeviceContext* g_Context = nullptr;
@@ -102,7 +102,7 @@ namespace Col {
 }
 
 // ============================================================================
-// WINDOW PROCEDURE
+// WINDOW PROC
 // ============================================================================
 LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
@@ -126,15 +126,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 }
 
 // ============================================================================
-// STEP 1: CREATE BLACK OVERLAY (INSTANT)
+// STEP 1: CREATE BLACK OVERLAY (MANDATORY FIRST)
 // ============================================================================
 bool CreateBlackOverlay()
 {
     // Get screen resolution
-    g_ScreenWidth = GetSystemMetrics(SM_CXSCREEN);
-    g_ScreenHeight = GetSystemMetrics(SM_CYSCREEN);
+    g_ScreenW = GetSystemMetrics(SM_CXSCREEN);
+    g_ScreenH = GetSystemMetrics(SM_CYSCREEN);
     
-    // Register window class with BLACK background
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
     wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -147,20 +146,20 @@ bool CreateBlackOverlay()
     if (!RegisterClassExW(&wc))
         return false;
     
-    // Create the BLACK overlay window (NOT transparent yet)
+    // Create BLACK overlay window
     g_BlackOverlay = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_NOACTIVATE,  // NO WS_EX_TRANSPARENT yet
+        WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_NOACTIVATE,
         wc.lpszClassName,
         L"",
         WS_POPUP,
         0, 0,
-        g_ScreenWidth, g_ScreenHeight,
+        g_ScreenW, g_ScreenH,
         nullptr, nullptr, wc.hInstance, nullptr);
     
     if (!g_BlackOverlay)
         return false;
     
-    // Show the BLACK window immediately
+    // Show the BLACK window first
     ShowWindow(g_BlackOverlay, SW_SHOWDEFAULT);
     UpdateWindow(g_BlackOverlay);
     
@@ -168,71 +167,54 @@ bool CreateBlackOverlay()
 }
 
 // ============================================================================
-// STEP 3: MAKE OVERLAY TRANSPARENT (After Hardware Scan)
+// STEP 3: MAKE TRANSPARENT (After Hardware Scan)
 // ============================================================================
 void MakeOverlayTransparent()
 {
-    if (!g_BlackOverlay || g_OverlayTransparent)
-        return;
+    if (!g_BlackOverlay) return;
     
-    // Color key: Make BLACK color transparent
+    // Color key: BLACK becomes transparent
     SetLayeredWindowAttributes(g_BlackOverlay, RGB(0, 0, 0), 0, LWA_COLORKEY);
     
-    // Add click-through when menu is hidden
-    LONG_PTR style = GetWindowLongPtrW(g_BlackOverlay, GWL_EXSTYLE);
-    if (!g_MenuVisible)
-        style |= WS_EX_TRANSPARENT;
-    SetWindowLongPtrW(g_BlackOverlay, GWL_EXSTYLE, style);
-    
-    // DWM extension for glass effect
+    // DWM glass
     MARGINS margins = {-1, -1, -1, -1};
     DwmExtendFrameIntoClientArea(g_BlackOverlay, &margins);
-    
-    g_OverlayTransparent = true;
 }
 
 // ============================================================================
-// INIT DIRECTX & DIRECT2D
+// INIT GRAPHICS
 // ============================================================================
 bool InitGraphics()
 {
     DXGI_SWAP_CHAIN_DESC scd = {};
     scd.BufferCount = 1;
-    scd.BufferDesc.Width = g_ScreenWidth;
-    scd.BufferDesc.Height = g_ScreenHeight;
+    scd.BufferDesc.Width = g_ScreenW;
+    scd.BufferDesc.Height = g_ScreenH;
     scd.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    scd.BufferDesc.RefreshRate.Numerator = 0;
-    scd.BufferDesc.RefreshRate.Denominator = 1;
     scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     scd.OutputWindow = g_BlackOverlay;
     scd.SampleDesc.Count = 1;
     scd.Windowed = TRUE;
     scd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
     
-    HRESULT hr = D3D11CreateDeviceAndSwapChain(
-        nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
-        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-        nullptr, 0, D3D11_SDK_VERSION,
-        &scd, &g_SwapChain, &g_Device, nullptr, &g_Context);
-    
-    if (FAILED(hr))
+    if (FAILED(D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION,
+        &scd, &g_SwapChain, &g_Device, nullptr, &g_Context)))
         return false;
     
-    ID3D11Texture2D* backBuffer = nullptr;
-    g_SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&backBuffer);
-    g_Device->CreateRenderTargetView(backBuffer, nullptr, &g_RenderTarget);
-    backBuffer->Release();
+    ID3D11Texture2D* bb = nullptr;
+    g_SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb);
+    g_Device->CreateRenderTargetView(bb, nullptr, &g_RenderTarget);
+    bb->Release();
     
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &g_D2DFactory);
     
     IDXGISurface* surface = nullptr;
     g_SwapChain->GetBuffer(0, __uuidof(IDXGISurface), (void**)&surface);
-    
-    D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
-        D2D1_RENDER_TARGET_TYPE_DEFAULT,
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
-    
-    g_D2DFactory->CreateDxgiSurfaceRenderTarget(surface, props, &g_D2DTarget);
+    g_D2DFactory->CreateDxgiSurfaceRenderTarget(surface,
+        D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)),
+        &g_D2DTarget);
     surface->Release();
     
     g_D2DTarget->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1), &g_Brush);
@@ -247,22 +229,18 @@ bool InitGraphics()
 }
 
 // ============================================================================
-// INPUT THREAD (Non-Blocking)
+// INPUT THREAD
 // ============================================================================
 void InputThread()
 {
     bool insertWasDown = false;
-    
     while (g_Running)
     {
         bool insertDown = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0;
-        
         if (insertDown && !insertWasDown)
         {
             g_MenuVisible = !g_MenuVisible;
-            
-            // Toggle click-through
-            if (g_BlackOverlay && g_OverlayTransparent)
+            if (g_BlackOverlay)
             {
                 LONG_PTR style = GetWindowLongPtrW(g_BlackOverlay, GWL_EXSTYLE);
                 if (g_MenuVisible)
@@ -282,13 +260,13 @@ void InputThread()
 }
 
 // ============================================================================
-// UPDATE THREAD
+// UPDATE THREAD - REAL DMA DATA
 // ============================================================================
 void UpdateThread()
 {
     while (g_Running)
     {
-        PlayerManager::Update();
+        PlayerManager::Update(); // Uses REAL DMA data only
         Sleep(16);
     }
 }
@@ -298,7 +276,7 @@ void UpdateThread()
 // ============================================================================
 inline void SetBrush(const D2D1_COLOR_F& c) { if (g_Brush) g_Brush->SetColor(c); }
 
-void DrawText_(const wchar_t* txt, float x, float y, const D2D1_COLOR_F& col, bool useSmall = false)
+void Text(const wchar_t* txt, float x, float y, const D2D1_COLOR_F& col, bool useSmall = false)
 {
     if (!g_D2DTarget || !g_Brush) return;
     SetBrush(col);
@@ -306,42 +284,42 @@ void DrawText_(const wchar_t* txt, float x, float y, const D2D1_COLOR_F& col, bo
     g_D2DTarget->DrawTextW(txt, (UINT32)wcslen(txt), useSmall ? g_SmallFont : g_TextFormat, r, g_Brush);
 }
 
-void FillRect_(float x, float y, float w, float h, const D2D1_COLOR_F& c)
+void FillRect(float x, float y, float w, float h, const D2D1_COLOR_F& c)
 {
     if (!g_D2DTarget) return;
     SetBrush(c);
     g_D2DTarget->FillRectangle(D2D1::RectF(x, y, x + w, y + h), g_Brush);
 }
 
-void DrawRect_(float x, float y, float w, float h, const D2D1_COLOR_F& c, float stroke = 2.0f)
+void DrawRect(float x, float y, float w, float h, const D2D1_COLOR_F& c, float stroke = 2.0f)
 {
     if (!g_D2DTarget) return;
     SetBrush(c);
     g_D2DTarget->DrawRectangle(D2D1::RectF(x, y, x + w, y + h), g_Brush, stroke);
 }
 
-void DrawLine_(float x1, float y1, float x2, float y2, const D2D1_COLOR_F& c, float stroke = 1.0f)
+void DrawLine(float x1, float y1, float x2, float y2, const D2D1_COLOR_F& c, float stroke = 1.0f)
 {
     if (!g_D2DTarget) return;
     SetBrush(c);
     g_D2DTarget->DrawLine(D2D1::Point2F(x1, y1), D2D1::Point2F(x2, y2), g_Brush, stroke);
 }
 
-void DrawCircle_(float cx, float cy, float r, const D2D1_COLOR_F& c, float stroke = 1.0f)
+void DrawCircle(float cx, float cy, float r, const D2D1_COLOR_F& c, float stroke = 1.0f)
 {
     if (!g_D2DTarget) return;
     SetBrush(c);
     g_D2DTarget->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), r, r), g_Brush, stroke);
 }
 
-void FillCircle_(float cx, float cy, float r, const D2D1_COLOR_F& c)
+void FillCircle(float cx, float cy, float r, const D2D1_COLOR_F& c)
 {
     if (!g_D2DTarget) return;
     SetBrush(c);
     g_D2DTarget->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), r, r), g_Brush);
 }
 
-void RoundedRect_(float x, float y, float w, float h, float r, const D2D1_COLOR_F& c)
+void RoundedRect(float x, float y, float w, float h, float r, const D2D1_COLOR_F& c)
 {
     if (!g_D2DTarget) return;
     SetBrush(c);
@@ -361,10 +339,10 @@ bool Toggle(const wchar_t* label, float x, float y, bool* value)
 {
     const float w = 40, h = 20;
     D2D1_COLOR_F bg = *value ? Col::Accent : Col::Gray;
-    RoundedRect_(x, y, w, h, h / 2, bg);
+    RoundedRect(x, y, w, h, h / 2, bg);
     float knobX = *value ? x + w - h + 2 : x + 2;
-    FillCircle_(knobX + (h - 4) / 2, y + h / 2, (h - 4) / 2, Col::White);
-    DrawText_(label, x + w + 10, y, Col::White, true);
+    FillCircle(knobX + (h - 4) / 2, y + h / 2, (h - 4) / 2, Col::White);
+    Text(label, x + w + 10, y, Col::White, true);
     
     if (g_MouseDown && HitTest(x, y, w + 150, h))
     {
@@ -378,16 +356,16 @@ bool Toggle(const wchar_t* label, float x, float y, bool* value)
 bool Slider(const wchar_t* label, float x, float y, float* value, float minV, float maxV)
 {
     const float w = 150, h = 6;
-    DrawText_(label, x, y - 18, Col::White, true);
+    Text(label, x, y - 18, Col::White, true);
     
-    FillRect_(x, y + 7, w, h, Col::Gray);
+    FillRect(x, y + 7, w, h, Col::Gray);
     float pct = (*value - minV) / (maxV - minV);
-    FillRect_(x, y + 7, w * pct, h, Col::Accent);
-    FillCircle_(x + w * pct, y + 10, 8, Col::White);
+    FillRect(x, y + 7, w * pct, h, Col::Accent);
+    FillCircle(x + w * pct, y + 10, 8, Col::White);
     
     wchar_t val[16];
     swprintf_s(val, L"%.1f", *value);
-    DrawText_(val, x + w + 10, y - 2, Col::Gray, true);
+    Text(val, x + w + 10, y - 2, Col::Gray, true);
     
     if (g_MouseDown && HitTest(x - 5, y, w + 10, 20))
     {
@@ -400,15 +378,21 @@ bool Slider(const wchar_t* label, float x, float y, float* value, float minV, fl
 }
 
 // ============================================================================
-// RENDER ESP (Aligned with Game Entities)
+// RENDER ESP - REAL DMA DATA ONLY
 // ============================================================================
 void RenderESP()
 {
     if (!g_Settings.espEnabled) return;
+    if (!g_DMA_Online.load()) return;  // NO DMA = NO ESP
     
     auto& players = PlayerManager::GetPlayers();
-    float centerX = (float)g_ScreenWidth / 2;
-    float centerY = (float)g_ScreenHeight / 2;
+    if (players.empty()) return;  // NO PLAYERS = NO ESP
+    
+    auto& local = PlayerManager::GetLocalPlayer();
+    if (!local.valid) return;  // NO LOCAL PLAYER = NO ESP
+    
+    float centerX = (float)g_ScreenW / 2;
+    float centerY = (float)g_ScreenH / 2;
     
     for (auto& p : players)
     {
@@ -416,55 +400,52 @@ void RenderESP()
         if (p.origin.x == 0 && p.origin.y == 0) continue;
         
         // Calculate screen position from world position
-        float angle = p.yaw * 3.14159f / 180.0f;
-        float dist = p.distance;
-        float screenX = centerX + cosf(angle) * (dist * 3.0f);
-        float screenY = centerY + sinf(angle) * (dist * 3.0f);
+        float angle = atan2f(p.origin.y - local.origin.y, p.origin.x - local.origin.x);
+        float localAngle = local.yaw * 3.14159f / 180.0f;
+        float relAngle = angle - localAngle;
         
-        // Skip if off-screen
-        if (screenX < 0 || screenX > g_ScreenWidth || screenY < 0 || screenY > g_ScreenHeight)
+        float dist = p.distance;
+        float screenDist = min(dist * 3.0f, (float)g_ScreenH / 2 - 50);
+        float screenX = centerX + cosf(relAngle) * screenDist;
+        float screenY = centerY - sinf(relAngle) * screenDist;
+        
+        if (screenX < 0 || screenX > g_ScreenW || screenY < 0 || screenY > g_ScreenH)
             continue;
         
-        // Calculate box size based on distance
-        float boxH = 80.0f - dist * 0.3f;
-        boxH = max(30.0f, boxH);
+        float boxH = max(30.0f, 80.0f - dist * 0.3f);
         float boxW = boxH * 0.4f;
         
         D2D1_COLOR_F color = p.isEnemy ? Col::Red : Col::Green;
         
-        // ESP Box
         if (g_Settings.espBoxes)
-            DrawRect_(screenX - boxW / 2, screenY - boxH, boxW, boxH, color, 2.0f);
+            DrawRect(screenX - boxW / 2, screenY - boxH, boxW, boxH, color, 2.0f);
         
-        // Health Bar
         if (g_Settings.espHealth)
         {
             float healthPct = (float)p.health / (float)p.maxHealth;
             float barH = boxH * healthPct;
             D2D1_COLOR_F hpColor = {1.0f - healthPct, healthPct, 0, 1.0f};
-            FillRect_(screenX - boxW / 2 - 6, screenY - barH, 4, barH, hpColor);
+            FillRect(screenX - boxW / 2 - 6, screenY - barH, 4, barH, hpColor);
         }
         
-        // Name
         if (g_Settings.espNames)
         {
             wchar_t nameW[32];
             mbstowcs_s(nullptr, nameW, p.name, 31);
-            DrawText_(nameW, screenX - 30, screenY - boxH - 18, Col::White, true);
+            Text(nameW, screenX - 30, screenY - boxH - 18, Col::White, true);
         }
         
-        // Distance
         if (g_Settings.espDistance)
         {
             wchar_t distStr[16];
             swprintf_s(distStr, L"%.0fm", p.distance);
-            DrawText_(distStr, screenX - 15, screenY + 5, Col::Yellow, true);
+            Text(distStr, screenX - 15, screenY + 5, Col::Yellow, true);
         }
     }
 }
 
 // ============================================================================
-// RENDER RADAR
+// RENDER RADAR - REAL DMA DATA ONLY
 // ============================================================================
 void RenderRadar()
 {
@@ -475,18 +456,27 @@ void RenderRadar()
     float cy = 20 + size / 2;
     
     // Background
-    FillCircle_(cx, cy, size / 2, D2D1_COLOR_F{0.1f, 0.1f, 0.1f, 0.85f});
-    DrawCircle_(cx, cy, size / 2, Col::Accent, 2.0f);
+    FillCircle(cx, cy, size / 2, D2D1_COLOR_F{0.1f, 0.1f, 0.1f, 0.85f});
+    DrawCircle(cx, cy, size / 2, Col::Accent, 2.0f);
+    DrawLine(cx - size / 2, cy, cx + size / 2, cy, D2D1_COLOR_F{0.3f, 0.3f, 0.3f, 0.5f}, 1.0f);
+    DrawLine(cx, cy - size / 2, cx, cy + size / 2, D2D1_COLOR_F{0.3f, 0.3f, 0.3f, 0.5f}, 1.0f);
+    FillCircle(cx, cy, 4, Col::Blue);
     
-    // Crosshairs
-    DrawLine_(cx - size / 2, cy, cx + size / 2, cy, D2D1_COLOR_F{0.3f, 0.3f, 0.3f, 0.5f}, 1.0f);
-    DrawLine_(cx, cy - size / 2, cx, cy + size / 2, D2D1_COLOR_F{0.3f, 0.3f, 0.3f, 0.5f}, 1.0f);
-    
-    // Local player dot
-    FillCircle_(cx, cy, 4, Col::Blue);
+    // IF DMA OFFLINE - RADAR STAYS EMPTY
+    if (!g_DMA_Online.load())
+    {
+        Text(L"DMA OFFLINE", cx - 35, cy + size / 2 + 5, Col::Red, true);
+        return;
+    }
     
     auto& players = PlayerManager::GetPlayers();
     auto& local = PlayerManager::GetLocalPlayer();
+    
+    if (players.empty() || !local.valid)
+    {
+        Text(L"NO DATA", cx - 25, cy + size / 2 + 5, Col::Yellow, true);
+        return;
+    }
     
     for (auto& p : players)
     {
@@ -496,7 +486,6 @@ void RenderRadar()
         Vec2 radarPos;
         WorldToRadar(p.origin, local.origin, local.yaw, radarPos, cx, cy, size);
         
-        // Clamp to radar bounds
         float dx = radarPos.x - cx, dy = radarPos.y - cy;
         float dist = sqrtf(dx * dx + dy * dy);
         if (dist > size / 2 - 5)
@@ -506,10 +495,12 @@ void RenderRadar()
             radarPos.y = cy + dy * scale;
         }
         
-        FillCircle_(radarPos.x, radarPos.y, 4, p.isEnemy ? Col::Red : Col::Green);
+        FillCircle(radarPos.x, radarPos.y, 4, p.isEnemy ? Col::Red : Col::Green);
     }
     
-    DrawText_(L"RADAR", cx - 20, cy + size / 2 + 5, Col::White, true);
+    wchar_t countStr[32];
+    swprintf_s(countStr, L"Players: %d", (int)players.size());
+    Text(countStr, cx - 30, cy + size / 2 + 5, Col::White, true);
 }
 
 // ============================================================================
@@ -518,10 +509,10 @@ void RenderRadar()
 void RenderCrosshair()
 {
     if (!g_Settings.crosshair) return;
-    float cx = (float)g_ScreenWidth / 2;
-    float cy = (float)g_ScreenHeight / 2;
-    DrawLine_(cx - 8, cy, cx + 8, cy, Col::White, 2.0f);
-    DrawLine_(cx, cy - 8, cx, cy + 8, Col::White, 2.0f);
+    float cx = (float)g_ScreenW / 2;
+    float cy = (float)g_ScreenH / 2;
+    DrawLine(cx - 8, cy, cx + 8, cy, Col::White, 2.0f);
+    DrawLine(cx, cy - 8, cx, cy + 8, Col::White, 2.0f);
 }
 
 // ============================================================================
@@ -530,42 +521,36 @@ void RenderCrosshair()
 void RenderFOVCircle()
 {
     if (!g_Settings.aimbotEnabled || !g_Settings.fovCircle) return;
-    float cx = (float)g_ScreenWidth / 2;
-    float cy = (float)g_ScreenHeight / 2;
-    DrawCircle_(cx, cy, g_Settings.aimbotFOV * 5, D2D1_COLOR_F{1, 1, 1, 0.3f}, 1.0f);
+    float cx = (float)g_ScreenW / 2;
+    float cy = (float)g_ScreenH / 2;
+    DrawCircle(cx, cy, g_Settings.aimbotFOV * 5, D2D1_COLOR_F{1, 1, 1, 0.3f}, 1.0f);
 }
 
 // ============================================================================
-// RENDER MENU (CENTERED ON BLACK OVERLAY)
+// RENDER MENU
 // ============================================================================
 void RenderMenu()
 {
     if (!g_MenuVisible) return;
     
     const float menuW = 420, menuH = 420;
-    float menuX = (float)g_ScreenWidth / 2 - menuW / 2;
-    float menuY = (float)g_ScreenHeight / 2 - menuH / 2;
+    float menuX = (float)g_ScreenW / 2 - menuW / 2;
+    float menuY = (float)g_ScreenH / 2 - menuH / 2;
     
-    // Menu Background
-    RoundedRect_(menuX, menuY, menuW, menuH, 10, Col::DarkBG);
+    RoundedRect(menuX, menuY, menuW, menuH, 10, Col::DarkBG);
+    FillRect(menuX, menuY, menuW, 40, Col::Accent);
+    Text(L"PROJECT ZERO | v4.4 REAL DMA", menuX + 15, menuY + 8, Col::White, false);
     
-    // Title Bar
-    FillRect_(menuX, menuY, menuW, 40, Col::Accent);
-    DrawText_(L"PROJECT ZERO | v4.3", menuX + 15, menuY + 8, Col::White, false);
-    
-    // Status Indicator (top right)
     bool dmaOnline = g_DMA_Online.load();
-    FillCircle_(menuX + menuW - 25, menuY + 20, 8, dmaOnline ? Col::Green : Col::Yellow);
+    FillCircle(menuX + menuW - 25, menuY + 20, 8, dmaOnline ? Col::Green : Col::Red);
     
-    // Tabs
     float tabY = menuY + 50;
     const wchar_t* tabNames[] = {L"ESP", L"RADAR", L"AIMBOT", L"STATUS"};
     for (int i = 0; i < 4; i++)
     {
         float tabX = menuX + 10 + i * 100;
-        D2D1_COLOR_F tabCol = (i == g_ActiveTab) ? Col::Accent : Col::TabBG;
-        RoundedRect_(tabX, tabY, 95, 30, 5, tabCol);
-        DrawText_(tabNames[i], tabX + 25, tabY + 5, Col::White, true);
+        RoundedRect(tabX, tabY, 95, 30, 5, (i == g_ActiveTab) ? Col::Accent : Col::TabBG);
+        Text(tabNames[i], tabX + 25, tabY + 5, Col::White, true);
         
         if (g_MouseDown && HitTest(tabX, tabY, 95, 30))
         {
@@ -574,12 +559,11 @@ void RenderMenu()
         }
     }
     
-    // Content Area
     float cX = menuX + 25, cY = tabY + 50;
     
     switch (g_ActiveTab)
     {
-    case 0: // ESP
+    case 0:
         Toggle(L"Enable ESP", cX, cY, &g_Settings.espEnabled);
         Toggle(L"Boxes", cX, cY + 35, &g_Settings.espBoxes);
         Toggle(L"Health Bars", cX, cY + 70, &g_Settings.espHealth);
@@ -588,65 +572,59 @@ void RenderMenu()
         Toggle(L"Crosshair", cX, cY + 175, &g_Settings.crosshair);
         break;
         
-    case 1: // RADAR
+    case 1:
         Toggle(L"Enable Radar", cX, cY, &g_Settings.radarEnabled);
         Slider(L"Size", cX, cY + 55, &g_Settings.radarSize, 100, 300);
         Slider(L"Zoom", cX, cY + 110, &g_Settings.radarZoom, 0.5f, 3.0f);
         break;
         
-    case 2: // AIMBOT
+    case 2:
         Toggle(L"Enable Aimbot", cX, cY, &g_Settings.aimbotEnabled);
         Toggle(L"FOV Circle", cX, cY + 35, &g_Settings.fovCircle);
         Slider(L"FOV", cX, cY + 90, &g_Settings.aimbotFOV, 5, 100);
         Slider(L"Smooth", cX, cY + 145, &g_Settings.aimbotSmooth, 1, 20);
         {
-            // KMBox Status
-            bool kmLocked = g_KMBox_Locked.load();
-            wchar_t kmStr[64];
-            swprintf_s(kmStr, L"KMBox: %S", GetKMBoxStatus());
-            DrawText_(kmStr, cX, cY + 200, kmLocked ? Col::Green : Col::Yellow, true);
-            
-            if (kmLocked)
+            bool km = g_KMBox_Locked.load();
+            wchar_t s[64];
+            swprintf_s(s, L"KMBox: %S", GetKMBoxStatus());
+            Text(s, cX, cY + 200, km ? Col::Green : Col::Yellow, true);
+            if (km)
             {
-                wchar_t portStr[32];
-                swprintf_s(portStr, L"Port: %S", HardwareController::GetLockedPort());
-                DrawText_(portStr, cX, cY + 225, Col::Gray, true);
+                wchar_t p[32];
+                swprintf_s(p, L"Port: %S", HardwareController::GetLockedPort());
+                Text(p, cX, cY + 225, Col::Gray, true);
             }
         }
         break;
         
-    case 3: // STATUS
+    case 3:
         {
-            // DMA Status
-            bool dmaOK = g_DMA_Online.load();
-            wchar_t dmaStr[64];
-            swprintf_s(dmaStr, L"DMA: %s", dmaOK ? L"ONLINE" : L"SCANNING...");
-            DrawText_(dmaStr, cX, cY, dmaOK ? Col::Green : Col::Yellow, true);
+            bool dma = g_DMA_Online.load();
+            wchar_t ds[64];
+            swprintf_s(ds, L"DMA: %s", dma ? L"ONLINE" : L"OFFLINE");
+            Text(ds, cX, cY, dma ? Col::Green : Col::Red, true);
             
-            // KMBox Status
-            bool kmOK = g_KMBox_Locked.load();
-            wchar_t kmStr[64];
-            swprintf_s(kmStr, L"KMBox: %s", kmOK ? L"AUTO-LOCKED" : L"SCANNING...");
-            DrawText_(kmStr, cX, cY + 30, kmOK ? Col::Green : Col::Yellow, true);
+            bool km = g_KMBox_Locked.load();
+            wchar_t ks[64];
+            swprintf_s(ks, L"KMBox: %S", GetKMBoxStatus());
+            Text(ks, cX, cY + 30, km ? Col::Green : Col::Yellow, true);
             
-            // Hardware Scan Complete
-            bool scanDone = g_HardwareScanDone.load();
-            DrawText_(scanDone ? L"Hardware: READY" : L"Hardware: SCANNING...", cX, cY + 60, 
-                      scanDone ? Col::Green : Col::Yellow, true);
+            bool scanDone = g_HWScanDone.load();
+            Text(scanDone ? L"Hardware: READY" : L"Hardware: SCANNING...", cX, cY + 60,
+                 scanDone ? Col::Green : Col::Yellow, true);
             
-            // Resolution
-            wchar_t resStr[64];
-            swprintf_s(resStr, L"Resolution: %dx%d", g_ScreenWidth, g_ScreenHeight);
-            DrawText_(resStr, cX, cY + 100, Col::White, true);
+            wchar_t rs[64];
+            swprintf_s(rs, L"Resolution: %dx%d", g_ScreenW, g_ScreenH);
+            Text(rs, cX, cY + 100, Col::White, true);
             
-            // Offsets
-            DrawText_(OffsetUpdater::s_Synced ? L"Offsets: CLOUD SYNC" : L"Offsets: LOCAL", 
-                      cX, cY + 130, OffsetUpdater::s_Synced ? Col::Green : Col::Yellow, true);
+            auto& players = PlayerManager::GetPlayers();
+            wchar_t ps[64];
+            swprintf_s(ps, L"Players: %d", (int)players.size());
+            Text(ps, cX, cY + 130, players.empty() ? Col::Yellow : Col::Green, true);
             
-            // Controls
-            DrawText_(L"---", cX, cY + 170, Col::Gray, true);
-            DrawText_(L"INSERT - Toggle Menu", cX, cY + 195, Col::Gray, true);
-            DrawText_(L"END - Exit", cX, cY + 220, Col::Gray, true);
+            Text(L"---", cX, cY + 170, Col::Gray, true);
+            Text(L"INSERT - Toggle Menu", cX, cY + 195, Col::Gray, true);
+            Text(L"END - Exit", cX, cY + 220, Col::Gray, true);
         }
         break;
     }
@@ -671,47 +649,55 @@ void Cleanup()
 }
 
 // ============================================================================
-// MAIN ENTRY POINT - STRICT AUTOMATION
+// MAIN - BLACK STAGE FIRST - REAL HARDWARE SYNC
 // ============================================================================
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
 {
     // ========================================
-    // STEP 1: CREATE BLACK OVERLAY (INSTANT)
+    // STEP 1: CREATE BLACK OVERLAY (FIRST!)
     // ========================================
     if (!CreateBlackOverlay())
-        return 0;
+        return 0;  // Cannot continue without Black Stage
     
-    // Init graphics on the black window
+    // ========================================
+    // STEP 2: INIT GRAPHICS ON BLACK STAGE
+    // ========================================
     if (!InitGraphics())
         return 0;
     
     // ========================================
-    // STEP 2: HARDWARE SCAN IN BACKGROUND
+    // STEP 3: HARDWARE SCAN IN BACKGROUND
     // ========================================
     std::thread hwThread([]() {
-        // DMA Initialization
+        // DMA: Run VMMDLL_Initialize
         if (InitDMA())
             g_DMA_Online = true;
+        else
+            g_DMA_Online = false;  // DMA OFFLINE
         
-        // KMBox Auto-Detection (scans all COM ports)
+        // KMBox: Auto-scan COM1-COM20 and ping
         if (AutoDetectKMBox())
             g_KMBox_Locked = true;
+        else
+            g_KMBox_Locked = false;  // NOT FOUND
         
-        // Mark scan complete
-        g_HardwareScanDone = true;
+        g_HWScanDone = true;
     });
     hwThread.detach();
     
     // ========================================
-    // STEP 3: MAKE OVERLAY TRANSPARENT
+    // STEP 4: MAKE OVERLAY TRANSPARENT
     // ========================================
-    // Apply transparency immediately so game is visible
     MakeOverlayTransparent();
     
-    // Initialize player manager
+    // ========================================
+    // STEP 5: INIT PLAYER MANAGER (REAL DATA)
+    // ========================================
     PlayerManager::Initialize();
     
-    // Start input and update threads
+    // ========================================
+    // STEP 6: START THREADS
+    // ========================================
     std::thread inputThread(InputThread);
     std::thread updateThread(UpdateThread);
     
@@ -732,14 +718,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
         if (!g_Running)
             break;
         
-        // Clear with BLACK (this color becomes transparent via LWA_COLORKEY)
+        // Clear with BLACK (becomes transparent via LWA_COLORKEY)
         float clearColor[4] = {0, 0, 0, 1};
         g_Context->ClearRenderTargetView(g_RenderTarget, clearColor);
         
         g_D2DTarget->BeginDraw();
         g_D2DTarget->Clear(Col::Black);
         
-        // Draw visuals
+        // ONLY DRAW ON THE BLACK STAGE (not desktop GDI)
         RenderESP();
         RenderRadar();
         RenderCrosshair();
@@ -748,7 +734,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
         
         g_D2DTarget->EndDraw();
         
-        // Present with V-Sync OFF (0 = immediate)
+        // V-Sync OFF
         g_SwapChain->Present(0, 0);
         
         Sleep(1);

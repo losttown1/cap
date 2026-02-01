@@ -1,5 +1,5 @@
-// DMA_Engine.hpp - FULL AUTO-LAUNCH v4.2
-// Zero Elite - Plug & Play Edition
+// DMA_Engine.hpp - STRICT AUTOMATION v4.3
+// Zero Elite - Black Stage Architecture
 
 #pragma once
 
@@ -18,9 +18,9 @@
 // MATH TYPES
 // ============================================================================
 struct Vec2 { float x = 0, y = 0; Vec2() = default; Vec2(float _x, float _y) : x(_x), y(_y) {} };
-struct Vec3 { 
-    float x = 0, y = 0, z = 0; 
-    Vec3() = default; 
+struct Vec3 {
+    float x = 0, y = 0, z = 0;
+    Vec3() = default;
     Vec3(float _x, float _y, float _z) : x(_x), y(_y), z(_z) {}
     Vec3 operator-(const Vec3& o) const { return Vec3(x - o.x, y - o.y, z - o.z); }
     Vec3 operator+(const Vec3& o) const { return Vec3(x + o.x, y + o.y, z + o.z); }
@@ -123,7 +123,7 @@ private:
 extern ScatterReadRegistry g_ScatterRegistry;
 
 // ============================================================================
-// LOGGING
+// LOGGING (Silent Mode)
 // ============================================================================
 enum class ConsoleColor { WHITE, GREEN, RED, YELLOW, CYAN, MAGENTA, GRAY };
 
@@ -425,8 +425,10 @@ Vec3 CalcAngle(const Vec3&, const Vec3&);
 void SmoothAngle(Vec3&, const Vec3&, float);
 
 // ============================================================================
-// EXTERNAL STATUS FUNCTIONS
+// MAIN ENTRY FUNCTIONS (Called from main())
 // ============================================================================
+extern bool InitDMA();
+extern bool AutoDetectKMBox();
 extern const char* GetKMBoxStatus();
 extern bool IsKMBoxConnected();
 extern bool IsHardwareScanComplete();

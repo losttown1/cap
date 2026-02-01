@@ -1,5 +1,5 @@
-// DMA_Engine.cpp - FULL AUTO-LAUNCH v4.2
-// Plug & Play - No User Input Required
+// DMA_Engine.cpp - STRICT AUTOMATION v4.3
+// Black Stage -> Hardware Scan -> Transparent -> Menu
 
 #include "DMA_Engine.hpp"
 #include <cstring>
@@ -31,14 +31,14 @@ static DWORD g_GamePID = 0;
 #endif
 
 // ============================================================================
-// HARDWARE STATUS
+// HARDWARE STATUS (Global Atomics)
 // ============================================================================
-static bool g_DMA_Online = false;
-static bool g_KMBox_Connected = false;
+static std::atomic<bool> g_DMA_Online_Internal(false);
+static std::atomic<bool> g_KMBox_Locked_Internal(false);
+static std::atomic<bool> g_HardwareScanDone_Internal(false);
 static char g_DMA_StatusStr[32] = "SCANNING...";
 static char g_KMBox_StatusStr[32] = "SCANNING...";
 static char g_LockedCOMPort[16] = "";
-static bool g_HardwareScanComplete = false;
 
 // ============================================================================
 // GLOBAL INSTANCES
@@ -54,7 +54,7 @@ static std::mutex g_DMAMutex;
 static std::atomic<bool> g_DMABusy(false);
 
 // ============================================================================
-// STATIC MEMBERS
+// STATIC MEMBER DEFINITIONS
 // ============================================================================
 bool DMAEngine::s_Connected = false;
 bool DMAEngine::s_Online = false;
@@ -99,7 +99,7 @@ int Aimbot::s_CurrentTarget = -1;
 Vec2 Aimbot::s_LastAimPos = {0, 0};
 
 // ============================================================================
-// LOGGER - SILENT MODE (No Console Unless Critical Failure)
+// LOGGER - SILENT (NO CONSOLE)
 // ============================================================================
 void Logger::Initialize() { s_Initialized = true; }
 void Logger::Shutdown() { s_Initialized = false; }
@@ -122,110 +122,117 @@ void Logger::LogSpinner(const char*, int) {}
 void Logger::ClearLine() {}
 
 // ============================================================================
-// SILENT DMA SCAN (Background)
+// INIT DMA - Called from main()
 // ============================================================================
-bool SilentDMAScan()
+bool InitDMA()
 {
 #if DMA_ENABLED
+    // Try to initialize FPGA device
     char arg0[] = "";
     char arg1[] = "-device";
     char arg2[] = "fpga";
-    char* args[3] = { arg0, arg1, arg2 };
+    char* args[3] = {arg0, arg1, arg2};
     
     g_VMMHandle = VMMDLL_Initialize(3, args);
     
     if (g_VMMHandle != NULL)
     {
-        g_DMA_Online = true;
+        g_DMA_Online_Internal = true;
         strcpy_s(g_DMA_StatusStr, "ONLINE");
         strcpy_s(DMAEngine::s_StatusText, "ONLINE");
         strcpy_s(DMAEngine::s_DeviceInfo, "FPGA Connected");
         DMAEngine::s_Connected = true;
         DMAEngine::s_Online = true;
+        
+        // Try to find game process
+        DWORD pid = 0;
+        if (VMMDLL_PidGetFromName(g_VMMHandle, (LPSTR)"cod.exe", &pid) && pid != 0)
+        {
+            g_GamePID = pid;
+            DMAEngine::s_BaseAddress = 0x140000000;
+            g_InitStatus.gameFound = true;
+        }
+        
         return true;
     }
 #endif
     
-    g_DMA_Online = false;
-    strcpy_s(g_DMA_StatusStr, "OFFLINE");
+    // Simulation mode
+    g_DMA_Online_Internal = false;
+    strcpy_s(g_DMA_StatusStr, "SIMULATION");
     strcpy_s(DMAEngine::s_StatusText, "SIMULATION");
     DMAEngine::s_SimulationMode = true;
+    DMAEngine::s_BaseAddress = 0x140000000;
+    g_Offsets.EntityList = DMAEngine::s_BaseAddress + 0x16D5C000;
+    
     return false;
 }
 
 // ============================================================================
-// LOAD SAVED CONFIG (Silent)
+// AUTO-DETECT KMBOX - Scans all COM ports automatically
 // ============================================================================
-bool LoadSavedKMBoxConfig()
+bool AutoDetectKMBox()
 {
 #ifdef _WIN32
+    // First try to load saved config
     std::ifstream configFile("config.ini");
-    if (!configFile.is_open()) return false;
-    
-    std::string line;
-    char savedPort[16] = {};
-    
-    while (std::getline(configFile, line))
+    if (configFile.is_open())
     {
-        if (line.find("KMBoxPort=") == 0)
+        std::string line;
+        char savedPort[16] = {};
+        
+        while (std::getline(configFile, line))
         {
-            strncpy_s(savedPort, line.substr(10).c_str(), sizeof(savedPort) - 1);
-            char* nl = strchr(savedPort, '\r'); if (nl) *nl = 0;
-            nl = strchr(savedPort, '\n'); if (nl) *nl = 0;
+            if (line.find("KMBoxPort=") == 0)
+            {
+                strncpy_s(savedPort, line.substr(10).c_str(), sizeof(savedPort) - 1);
+                char* nl = strchr(savedPort, '\r'); if (nl) *nl = 0;
+                nl = strchr(savedPort, '\n'); if (nl) *nl = 0;
+            }
+        }
+        configFile.close();
+        
+        if (savedPort[0] != 0)
+        {
+            char fullPath[32];
+            snprintf(fullPath, sizeof(fullPath), "\\\\.\\%s", savedPort);
+            
+            HANDLE hPort = CreateFileA(fullPath, GENERIC_READ | GENERIC_WRITE,
+                                        0, nullptr, OPEN_EXISTING, 0, nullptr);
+            
+            if (hPort != INVALID_HANDLE_VALUE)
+            {
+                DCB dcb = {};
+                dcb.DCBlength = sizeof(DCB);
+                GetCommState(hPort, &dcb);
+                dcb.BaudRate = 115200;
+                dcb.ByteSize = 8;
+                dcb.Parity = NOPARITY;
+                dcb.StopBits = ONESTOPBIT;
+                dcb.fDtrControl = DTR_CONTROL_ENABLE;
+                SetCommState(hPort, &dcb);
+                
+                COMMTIMEOUTS timeouts = {};
+                timeouts.ReadIntervalTimeout = 50;
+                timeouts.ReadTotalTimeoutConstant = 100;
+                SetCommTimeouts(hPort, &timeouts);
+                
+                HardwareController::s_Handle = hPort;
+                HardwareController::s_Connected = true;
+                HardwareController::s_Type = ControllerType::KMBOX_B_PLUS;
+                strcpy_s(HardwareController::s_LockedPort, savedPort);
+                strcpy_s(g_LockedCOMPort, savedPort);
+                snprintf(HardwareController::s_DeviceName, sizeof(HardwareController::s_DeviceName),
+                         "KMBox [%s]", savedPort);
+                g_KMBox_Locked_Internal = true;
+                strcpy_s(g_KMBox_StatusStr, "AUTO-LOCKED");
+                
+                return true;
+            }
         }
     }
     
-    if (savedPort[0] != 0)
-    {
-        char fullPath[32];
-        snprintf(fullPath, sizeof(fullPath), "\\\\.\\%s", savedPort);
-        
-        HANDLE hPort = CreateFileA(fullPath, GENERIC_READ | GENERIC_WRITE,
-                                    0, nullptr, OPEN_EXISTING, 0, nullptr);
-        
-        if (hPort != INVALID_HANDLE_VALUE)
-        {
-            DCB dcb = {};
-            dcb.DCBlength = sizeof(DCB);
-            GetCommState(hPort, &dcb);
-            dcb.BaudRate = 115200;
-            dcb.ByteSize = 8;
-            dcb.Parity = NOPARITY;
-            dcb.StopBits = ONESTOPBIT;
-            SetCommState(hPort, &dcb);
-            
-            COMMTIMEOUTS timeouts = {};
-            timeouts.ReadIntervalTimeout = 50;
-            timeouts.ReadTotalTimeoutConstant = 100;
-            SetCommTimeouts(hPort, &timeouts);
-            
-            HardwareController::s_Handle = hPort;
-            HardwareController::s_Connected = true;
-            HardwareController::s_Type = ControllerType::KMBOX_B_PLUS;
-            strcpy_s(HardwareController::s_LockedPort, savedPort);
-            strcpy_s(g_LockedCOMPort, savedPort);
-            snprintf(HardwareController::s_DeviceName, sizeof(HardwareController::s_DeviceName), 
-                     "KMBox [%s]", savedPort);
-            g_KMBox_Connected = true;
-            strcpy_s(g_KMBox_StatusStr, "AUTO-LOCKED");
-            return true;
-        }
-    }
-#endif
-    return false;
-}
-
-// ============================================================================
-// SILENT COM PORT SCAN (Background, No Pop-ups)
-// ============================================================================
-bool SilentKMBoxScan()
-{
-#ifdef _WIN32
-    // First try saved config
-    if (LoadSavedKMBoxConfig())
-        return true;
-    
-    // Silent auto-scan
+    // Scan all COM ports (1-20)
     for (int portNum = 1; portNum <= 20; portNum++)
     {
         char fullPath[32];
@@ -237,6 +244,7 @@ bool SilentKMBoxScan()
         if (hPort == INVALID_HANDLE_VALUE)
             continue;
         
+        // Configure serial port
         DCB dcb = {};
         dcb.DCBlength = sizeof(DCB);
         GetCommState(hPort, &dcb);
@@ -245,6 +253,7 @@ bool SilentKMBoxScan()
         dcb.Parity = NOPARITY;
         dcb.StopBits = ONESTOPBIT;
         dcb.fDtrControl = DTR_CONTROL_ENABLE;
+        dcb.fRtsControl = RTS_CONTROL_ENABLE;
         
         if (!SetCommState(hPort, &dcb))
         {
@@ -258,22 +267,24 @@ bool SilentKMBoxScan()
         timeouts.ReadTotalTimeoutMultiplier = 10;
         SetCommTimeouts(hPort, &timeouts);
         
-        // Silent handshake
+        // Clear buffers
         PurgeComm(hPort, PURGE_RXCLEAR | PURGE_TXCLEAR);
         
-        const char* ping = "km.version()\r\n";
+        // Send handshake
+        const char* handshake = "km.version()\r\n";
         DWORD written = 0;
-        WriteFile(hPort, ping, (DWORD)strlen(ping), &written, nullptr);
+        WriteFile(hPort, handshake, (DWORD)strlen(handshake), &written, nullptr);
         
         Sleep(100);
         
+        // Read response
         char response[128] = {};
         DWORD bytesRead = 0;
         ReadFile(hPort, response, sizeof(response) - 1, &bytesRead, nullptr);
         
         if (bytesRead > 0)
         {
-            // Found KMBox - lock it silently
+            // Device responded - LOCK IT
             char portName[16];
             snprintf(portName, sizeof(portName), "COM%d", portNum);
             
@@ -282,18 +293,18 @@ bool SilentKMBoxScan()
             HardwareController::s_Type = ControllerType::KMBOX_B_PLUS;
             strcpy_s(HardwareController::s_LockedPort, portName);
             strcpy_s(g_LockedCOMPort, portName);
-            snprintf(HardwareController::s_DeviceName, sizeof(HardwareController::s_DeviceName), 
+            snprintf(HardwareController::s_DeviceName, sizeof(HardwareController::s_DeviceName),
                      "KMBox [%s]", portName);
-            g_KMBox_Connected = true;
+            g_KMBox_Locked_Internal = true;
             strcpy_s(g_KMBox_StatusStr, "AUTO-LOCKED");
             
             // Save to config for next time
-            std::ofstream configFile("config.ini");
-            if (configFile.is_open())
+            std::ofstream saveFile("config.ini");
+            if (saveFile.is_open())
             {
-                configFile << "[Hardware]\n";
-                configFile << "KMBoxPort=" << portName << "\n";
-                configFile.close();
+                saveFile << "[Hardware]\n";
+                saveFile << "KMBoxPort=" << portName << "\n";
+                saveFile.close();
             }
             
             return true;
@@ -303,26 +314,120 @@ bool SilentKMBoxScan()
     }
 #endif
     
-    g_KMBox_Connected = false;
+    // No device found
+    g_KMBox_Locked_Internal = false;
     strcpy_s(g_KMBox_StatusStr, "NOT FOUND");
     return false;
 }
 
 // ============================================================================
+// EXTERNAL STATUS FUNCTIONS
+// ============================================================================
+const char* GetKMBoxStatus()
+{
+    return g_KMBox_StatusStr;
+}
+
+bool IsKMBoxConnected()
+{
+    return g_KMBox_Locked_Internal.load();
+}
+
+bool IsHardwareScanComplete()
+{
+    return g_HardwareScanDone_Internal.load();
+}
+
+// ============================================================================
+// SCATTER READS - FIXED C2664 ERROR
+// ============================================================================
+void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
+{
+    if (entries.empty()) return;
+    
+#if DMA_ENABLED
+    if (g_VMMHandle == NULL || g_GamePID == 0 || g_DMABusy.exchange(true))
+    {
+        for (auto& e : entries)
+            if (e.buffer) memset(e.buffer, 0, e.size);
+        g_DMABusy = false;
+        return;
+    }
+    
+    // FIXED: Use PVMMDLL_SCATTER_HANDLE (pointer type)
+    PVMMDLL_SCATTER_HANDLE hScatter = VMMDLL_Scatter_Initialize(g_VMMHandle, g_GamePID, VMMDLL_FLAG_NOCACHE);
+    
+    if (hScatter == NULL)
+    {
+        // Fallback to individual reads
+        for (auto& e : entries)
+        {
+            if (e.buffer && e.address != 0 && e.size > 0)
+                VMMDLL_MemReadEx(g_VMMHandle, g_GamePID, e.address, (PBYTE)e.buffer, (DWORD)e.size, nullptr, VMMDLL_FLAG_NOCACHE);
+            else if (e.buffer)
+                memset(e.buffer, 0, e.size);
+        }
+        g_DMABusy = false;
+        return;
+    }
+    
+    // Prepare scatter reads
+    for (auto& e : entries)
+    {
+        if (e.address != 0 && e.size > 0 && e.size <= 0x10000)
+            VMMDLL_Scatter_Prepare(hScatter, e.address, (DWORD)e.size);
+    }
+    
+    // Execute batch read
+    if (!VMMDLL_Scatter_Execute(hScatter))
+    {
+        VMMDLL_Scatter_CloseHandle(hScatter);
+        for (auto& e : entries)
+            if (e.buffer) memset(e.buffer, 0, e.size);
+        g_DMABusy = false;
+        return;
+    }
+    
+    // Read results
+    for (auto& e : entries)
+    {
+        if (e.buffer && e.address != 0 && e.size > 0)
+        {
+            if (!VMMDLL_Scatter_Read(hScatter, e.address, (DWORD)e.size, (PBYTE)e.buffer, nullptr))
+                memset(e.buffer, 0, e.size);
+        }
+    }
+    
+    VMMDLL_Scatter_CloseHandle(hScatter);
+    g_DMABusy = false;
+#else
+    for (auto& e : entries)
+        if (e.buffer) memset(e.buffer, 0, e.size);
+#endif
+}
+
+// ============================================================================
 // HARDWARE CONTROLLER
 // ============================================================================
-bool HardwareController::Initialize() { return SilentKMBoxScan(); }
+bool HardwareController::Initialize()
+{
+    return AutoDetectKMBox();
+}
 
 void HardwareController::Shutdown()
 {
 #ifdef _WIN32
-    if (s_Handle) { CloseHandle(s_Handle); s_Handle = nullptr; }
+    if (s_Handle)
+    {
+        CloseHandle(s_Handle);
+        s_Handle = nullptr;
+    }
 #endif
     s_Connected = false;
-    g_KMBox_Connected = false;
+    g_KMBox_Locked_Internal = false;
 }
 
-bool HardwareController::IsConnected() { return s_Connected && g_KMBox_Connected; }
+bool HardwareController::IsConnected() { return s_Connected && g_KMBox_Locked_Internal.load(); }
 const char* HardwareController::GetDeviceName() { return s_DeviceName; }
 ControllerType HardwareController::GetType() { return s_Type; }
 const char* HardwareController::GetLockedPort() { return s_LockedPort; }
@@ -330,7 +435,7 @@ const char* HardwareController::GetLockedPort() { return s_LockedPort; }
 bool HardwareController::MoveMouse(int dx, int dy)
 {
 #ifdef _WIN32
-    if (s_Connected && s_Handle && g_KMBox_Connected)
+    if (s_Connected && s_Handle && g_KMBox_Locked_Internal.load())
     {
         char cmd[32];
         snprintf(cmd, sizeof(cmd), "km.move(%d,%d)\r\n", dx, dy);
@@ -357,70 +462,87 @@ bool HardwareController::SerialWrite(const char*, int) { return false; }
 bool HardwareController::SocketSend(const char*, int) { return false; }
 
 // ============================================================================
-// SCATTER READS - FIXED C2664
+// DMA ENGINE
 // ============================================================================
-void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
+bool DMAEngine::Initialize()
 {
-    if (entries.empty()) return;
-    
-#if DMA_ENABLED
-    if (g_VMMHandle == NULL || g_GamePID == 0 || g_DMABusy.exchange(true))
-    {
-        for (auto& e : entries) if (e.buffer) memset(e.buffer, 0, e.size);
-        g_DMABusy = false;
-        return;
-    }
-    
-    // FIXED C2664: PVMMDLL_SCATTER_HANDLE is pointer type
-    PVMMDLL_SCATTER_HANDLE hScatter = VMMDLL_Scatter_Initialize(g_VMMHandle, g_GamePID, VMMDLL_FLAG_NOCACHE);
-    
-    if (hScatter == NULL)
-    {
-        for (auto& e : entries)
-        {
-            if (e.buffer && e.address != 0 && e.size > 0)
-                VMMDLL_MemReadEx(g_VMMHandle, g_GamePID, e.address, (PBYTE)e.buffer, (DWORD)e.size, nullptr, VMMDLL_FLAG_NOCACHE);
-            else if (e.buffer)
-                memset(e.buffer, 0, e.size);
-        }
-        g_DMABusy = false;
-        return;
-    }
-    
-    for (auto& e : entries)
-    {
-        if (e.address != 0 && e.size > 0 && e.size <= 0x10000)
-            VMMDLL_Scatter_Prepare(hScatter, e.address, (DWORD)e.size);
-    }
-    
-    if (!VMMDLL_Scatter_Execute(hScatter))
-    {
-        VMMDLL_Scatter_CloseHandle(hScatter);
-        for (auto& e : entries) if (e.buffer) memset(e.buffer, 0, e.size);
-        g_DMABusy = false;
-        return;
-    }
-    
-    for (auto& e : entries)
-    {
-        if (e.buffer && e.address != 0 && e.size > 0)
-        {
-            if (!VMMDLL_Scatter_Read(hScatter, e.address, (DWORD)e.size, (PBYTE)e.buffer, nullptr))
-                memset(e.buffer, 0, e.size);
-        }
-    }
-    
-    VMMDLL_Scatter_CloseHandle(hScatter);
-    g_DMABusy = false;
-#else
-    for (auto& e : entries) if (e.buffer) memset(e.buffer, 0, e.size);
-#endif
+    return InitDMA();
 }
 
+bool DMAEngine::InitializeWithConfig(const DMAConfig&) { return Initialize(); }
+bool DMAEngine::InitializeFTD3XX() { return Initialize(); }
+
+void DMAEngine::Shutdown()
+{
+#if DMA_ENABLED
+    if (g_VMMHandle)
+    {
+        VMMDLL_Close(g_VMMHandle);
+        g_VMMHandle = nullptr;
+    }
+#endif
+    HardwareController::Shutdown();
+}
+
+bool DMAEngine::IsConnected() { return s_Connected || g_DMA_Online_Internal.load(); }
+bool DMAEngine::IsOnline() { return s_Online || s_SimulationMode || g_InitStatus.allChecksPassed; }
+const char* DMAEngine::GetStatus() { return g_DMA_StatusStr; }
+const char* DMAEngine::GetDeviceInfo() { return s_DeviceInfo; }
+const char* DMAEngine::GetDriverMode() { return s_DriverMode; }
+
+template<typename T>
+T DMAEngine::Read(uintptr_t addr)
+{
+    T value = {};
+    if (addr == 0) return value;
+#if DMA_ENABLED
+    if (g_VMMHandle && g_GamePID)
+        VMMDLL_MemReadEx(g_VMMHandle, g_GamePID, addr, (PBYTE)&value, sizeof(T), nullptr, VMMDLL_FLAG_NOCACHE);
+#endif
+    return value;
+}
+
+bool DMAEngine::ReadBuffer(uintptr_t addr, void* buf, size_t size)
+{
+    if (addr == 0 || !buf || size == 0) return false;
+#if DMA_ENABLED
+    if (g_VMMHandle && g_GamePID)
+        return VMMDLL_MemReadEx(g_VMMHandle, g_GamePID, addr, (PBYTE)buf, (DWORD)size, nullptr, VMMDLL_FLAG_NOCACHE);
+#endif
+    return false;
+}
+
+bool DMAEngine::ReadString(uintptr_t addr, char* buf, size_t maxLen)
+{
+    if (!buf || !maxLen || addr == 0) return false;
+    buf[0] = 0;
+    return ReadBuffer(addr, buf, maxLen - 1);
+}
+
+void DMAEngine::ExecuteScatter(std::vector<ScatterEntry>& entries)
+{
+    ExecuteScatterReads(entries);
+}
+
+uintptr_t DMAEngine::GetBaseAddress() { return s_BaseAddress; }
+uintptr_t DMAEngine::GetModuleBase(const wchar_t*) { return s_BaseAddress; }
+size_t DMAEngine::GetModuleSize() { return s_ModuleSize; }
+
+// Template instantiations
+template int32_t DMAEngine::Read<int32_t>(uintptr_t);
+template uint32_t DMAEngine::Read<uint32_t>(uintptr_t);
+template int64_t DMAEngine::Read<int64_t>(uintptr_t);
+template uint64_t DMAEngine::Read<uint64_t>(uintptr_t);
+template float DMAEngine::Read<float>(uintptr_t);
+template uintptr_t DMAEngine::Read<uintptr_t>(uintptr_t);
+
 // ============================================================================
-// OFFSET UPDATER (Silent Background)
+// OFFSET UPDATER
 // ============================================================================
-void OffsetUpdater::SetOffsetURL(const char* url) { strncpy_s(s_OffsetURL, url, sizeof(s_OffsetURL) - 1); }
+void OffsetUpdater::SetOffsetURL(const char* url)
+{
+    strncpy_s(s_OffsetURL, url, sizeof(s_OffsetURL) - 1);
+}
 
 bool OffsetUpdater::HttpGet(const char* url, std::string& response)
 {
@@ -439,7 +561,7 @@ bool OffsetUpdater::HttpGet(const char* url, std::string& response)
     
     if (!WinHttpCrackUrl(urlW, 0, 0, &urlComp)) return false;
     
-    HINTERNET hSession = WinHttpOpen(L"ZeroElite/4.2", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, nullptr, nullptr, 0);
+    HINTERNET hSession = WinHttpOpen(L"ZeroElite/4.3", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, nullptr, nullptr, 0);
     if (!hSession) return false;
     
     DWORD timeout = 3000;
@@ -455,7 +577,9 @@ bool OffsetUpdater::HttpGet(const char* url, std::string& response)
     if (!WinHttpSendRequest(hRequest, nullptr, 0, nullptr, 0, 0, 0) ||
         !WinHttpReceiveResponse(hRequest, nullptr))
     {
-        WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
         return false;
     }
     
@@ -467,10 +591,13 @@ bool OffsetUpdater::HttpGet(const char* url, std::string& response)
         response += buffer;
     }
     
-    WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
     return !response.empty();
 #else
-    (void)url; response = "";
+    (void)url;
+    response = "";
     return false;
 #endif
 }
@@ -485,12 +612,19 @@ bool OffsetUpdater::UpdateOffsetsFromServer()
 
 bool OffsetUpdater::SyncWithCloud(int maxRetries, int retryDelayMs)
 {
-    if (s_OffsetURL[0] == 0) strcpy_s(s_OffsetURL, DEFAULT_OFFSET_URL);
+    if (s_OffsetURL[0] == 0)
+        strcpy_s(s_OffsetURL, DEFAULT_OFFSET_URL);
     
     for (int i = 0; i < maxRetries; i++)
     {
-        if (UpdateOffsetsFromServer()) { s_Synced = true; s_Updated = true; return true; }
-        if (i < maxRetries - 1) std::this_thread::sleep_for(std::chrono::milliseconds(retryDelayMs));
+        if (UpdateOffsetsFromServer())
+        {
+            s_Synced = true;
+            s_Updated = true;
+            return true;
+        }
+        if (i < maxRetries - 1)
+            std::this_thread::sleep_for(std::chrono::milliseconds(retryDelayMs));
     }
     return false;
 }
@@ -507,18 +641,26 @@ bool OffsetUpdater::ParseOffsetsTXT(const char* txtData)
     
     while (std::getline(stream, line))
     {
-        if (line.empty() || line[0] == ';' || line[0] == '#' || line[0] == '[') continue;
+        if (line.empty() || line[0] == ';' || line[0] == '#' || line[0] == '[')
+            continue;
+        
         size_t eq = line.find('=');
         if (eq == std::string::npos) continue;
         
         std::string key = line.substr(0, eq);
         std::string value = line.substr(eq + 1);
+        
+        // Trim
         while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
         while (!value.empty() && value[0] == ' ') value.erase(0, 1);
         while (!value.empty() && (value.back() == '\r' || value.back() == '\n' || value.back() == ' ')) value.pop_back();
+        
         if (key.empty() || value.empty()) continue;
         
-        uintptr_t val = (value.find("0x") == 0) ? strtoull(value.c_str(), nullptr, 16) : strtoull(value.c_str(), nullptr, 10);
+        uintptr_t val = (value.find("0x") == 0) ?
+            strtoull(value.c_str(), nullptr, 16) :
+            strtoull(value.c_str(), nullptr, 10);
+        
         std::string keyLower = key;
         for (auto& c : keyLower) c = (char)tolower(c);
         
@@ -529,7 +671,12 @@ bool OffsetUpdater::ParseOffsetsTXT(const char* txtData)
     }
     
     offsets.valid = (foundCount > 0);
-    if (offsets.valid) { s_LastOffsets = offsets; s_Updated = true; return ApplyOffsets(offsets); }
+    if (offsets.valid)
+    {
+        s_LastOffsets = offsets;
+        s_Updated = true;
+        return ApplyOffsets(offsets);
+    }
     return false;
 }
 
@@ -547,43 +694,24 @@ bool OffsetUpdater::ApplyOffsets(const RemoteOffsets& o)
 }
 
 // ============================================================================
-// FULL AUTO INITIALIZATION (No User Input)
+// PROFESSIONAL INIT
 // ============================================================================
 bool ProfessionalInit::RunProfessionalChecks()
 {
     memset(&g_InitStatus, 0, sizeof(g_InitStatus));
     
-    // SILENT DMA SCAN
-    SilentDMAScan();
-    g_InitStatus.dmaConnected = g_DMA_Online;
+    // DMA
+    if (InitDMA())
+        g_InitStatus.dmaConnected = true;
     
-    // SILENT KMBOX SCAN
-    HardwareController::Initialize();
+    // KMBox
+    if (AutoDetectKMBox())
+        g_InitStatus.controllerConnected = true;
     
-    // SILENT GAME DETECTION
-#if DMA_ENABLED
-    if (g_VMMHandle != NULL)
-    {
-        DWORD pid = 0;
-        if (VMMDLL_PidGetFromName(g_VMMHandle, (LPSTR)"cod.exe", &pid) && pid != 0)
-        {
-            g_GamePID = pid;
-            DMAEngine::s_BaseAddress = 0x140000000;
-            g_InitStatus.gameFound = true;
-        }
-    }
-#endif
-    
-    if (!g_InitStatus.gameFound)
-    {
-        DMAEngine::s_BaseAddress = 0x140000000;
-        g_Offsets.EntityList = DMAEngine::s_BaseAddress + 0x16D5C000;
-    }
-    
-    // SILENT CLOUD SYNC (Background Thread)
+    // Cloud sync in background
     std::thread([]() { OffsetUpdater::SyncWithCloud(2, 1000); }).detach();
     
-    g_HardwareScanComplete = true;
+    g_HardwareScanDone_Internal = true;
     g_InitStatus.allChecksPassed = true;
     
     return true;
@@ -597,77 +725,14 @@ void ProfessionalInit::GetKeyboardState(char* b, size_t s) { snprintf(b, s, "Rea
 void ProfessionalInit::GetMouseState(char* b, size_t s) { snprintf(b, s, "Ready"); }
 
 // ============================================================================
-// DMA ENGINE
-// ============================================================================
-bool DMAEngine::Initialize() { return ProfessionalInit::RunProfessionalChecks(); }
-bool DMAEngine::InitializeWithConfig(const DMAConfig&) { return Initialize(); }
-bool DMAEngine::InitializeFTD3XX() { return Initialize(); }
-
-void DMAEngine::Shutdown()
-{
-#if DMA_ENABLED
-    if (g_VMMHandle) { VMMDLL_Close(g_VMMHandle); g_VMMHandle = nullptr; }
-#endif
-    HardwareController::Shutdown();
-}
-
-bool DMAEngine::IsConnected() { return s_Connected || g_DMA_Online; }
-bool DMAEngine::IsOnline() { return s_Online || s_SimulationMode || g_InitStatus.allChecksPassed; }
-const char* DMAEngine::GetStatus() { return g_DMA_StatusStr; }
-const char* DMAEngine::GetDeviceInfo() { return s_DeviceInfo; }
-const char* DMAEngine::GetDriverMode() { return s_DriverMode; }
-
-const char* GetKMBoxStatus() { return g_KMBox_StatusStr; }
-bool IsKMBoxConnected() { return g_KMBox_Connected; }
-bool IsHardwareScanComplete() { return g_HardwareScanComplete; }
-
-template<typename T> T DMAEngine::Read(uintptr_t a)
-{
-    T v = {};
-    if (a == 0) return v;
-#if DMA_ENABLED
-    if (g_VMMHandle && g_GamePID)
-        VMMDLL_MemReadEx(g_VMMHandle, g_GamePID, a, (PBYTE)&v, sizeof(T), nullptr, VMMDLL_FLAG_NOCACHE);
-#endif
-    return v;
-}
-
-bool DMAEngine::ReadBuffer(uintptr_t a, void* b, size_t s)
-{
-    if (a == 0 || !b || s == 0) return false;
-#if DMA_ENABLED
-    if (g_VMMHandle && g_GamePID)
-        return VMMDLL_MemReadEx(g_VMMHandle, g_GamePID, a, (PBYTE)b, (DWORD)s, nullptr, VMMDLL_FLAG_NOCACHE);
-#endif
-    return false;
-}
-
-bool DMAEngine::ReadString(uintptr_t a, char* b, size_t m)
-{
-    if (!b || !m || a == 0) return false;
-    b[0] = 0;
-    return ReadBuffer(a, b, m - 1);
-}
-
-void DMAEngine::ExecuteScatter(std::vector<ScatterEntry>& e) { ExecuteScatterReads(e); }
-uintptr_t DMAEngine::GetBaseAddress() { return s_BaseAddress; }
-uintptr_t DMAEngine::GetModuleBase(const wchar_t*) { return s_BaseAddress; }
-size_t DMAEngine::GetModuleSize() { return s_ModuleSize; }
-
-template int32_t DMAEngine::Read<int32_t>(uintptr_t);
-template uint32_t DMAEngine::Read<uint32_t>(uintptr_t);
-template int64_t DMAEngine::Read<int64_t>(uintptr_t);
-template uint64_t DMAEngine::Read<uint64_t>(uintptr_t);
-template float DMAEngine::Read<float>(uintptr_t);
-template uintptr_t DMAEngine::Read<uintptr_t>(uintptr_t);
-
-// ============================================================================
 // SCATTER REGISTRY
 // ============================================================================
 void ScatterReadRegistry::RegisterPlayerData(int idx, uintptr_t base)
 {
     if (idx < 0 || base == 0) return;
-    while ((int)m_PlayerBuffers.size() <= idx) m_PlayerBuffers.push_back({});
+    while ((int)m_PlayerBuffers.size() <= idx)
+        m_PlayerBuffers.push_back({});
+    
     auto& buf = m_PlayerBuffers[idx];
     m_Entries.push_back({base + GameOffsets::EntityPos, &buf.position, sizeof(Vec3), ScatterDataType::PLAYER_POSITION, idx});
     m_Entries.push_back({base + GameOffsets::EntityHealth, &buf.health, sizeof(int), ScatterDataType::PLAYER_HEALTH, idx});
@@ -682,25 +747,58 @@ void ScatterReadRegistry::RegisterLocalPlayer(uintptr_t base)
     m_Entries.push_back({base + GameOffsets::EntityYaw, &m_LocalYaw, sizeof(float), ScatterDataType::LOCAL_YAW, -1});
 }
 
-void ScatterReadRegistry::RegisterViewMatrix(uintptr_t addr) { if (addr) m_Entries.push_back({addr, &m_ViewMatrix, sizeof(Matrix4x4), ScatterDataType::VIEW_MATRIX, -1}); }
-void ScatterReadRegistry::RegisterCustomRead(uintptr_t addr, void* buf, size_t size) { if (addr && buf && size) m_Entries.push_back({addr, buf, size, ScatterDataType::CUSTOM, -1}); }
-void ScatterReadRegistry::ExecuteAll() { if (!m_Entries.empty()) { m_TransactionCount++; ExecuteScatterReads(m_Entries); } }
+void ScatterReadRegistry::RegisterViewMatrix(uintptr_t addr)
+{
+    if (addr)
+        m_Entries.push_back({addr, &m_ViewMatrix, sizeof(Matrix4x4), ScatterDataType::VIEW_MATRIX, -1});
+}
+
+void ScatterReadRegistry::RegisterCustomRead(uintptr_t addr, void* buf, size_t size)
+{
+    if (addr && buf && size)
+        m_Entries.push_back({addr, buf, size, ScatterDataType::CUSTOM, -1});
+}
+
+void ScatterReadRegistry::ExecuteAll()
+{
+    if (!m_Entries.empty())
+    {
+        m_TransactionCount++;
+        ExecuteScatterReads(m_Entries);
+    }
+}
+
 void ScatterReadRegistry::Clear() { m_Entries.clear(); }
-int ScatterReadRegistry::GetTotalBytes() const { int t = 0; for (auto& e : m_Entries) t += (int)e.size; return t; }
+
+int ScatterReadRegistry::GetTotalBytes() const
+{
+    int total = 0;
+    for (auto& e : m_Entries) total += (int)e.size;
+    return total;
+}
 
 // ============================================================================
-// MAP TEXTURE
+// MAP TEXTURE MANAGER
 // ============================================================================
 void MapTextureManager::InitializeMapDatabase() {}
 bool MapTextureManager::LoadMapConfig(const char* n) { strcpy_s(s_CurrentMap.name, n); return false; }
 bool MapTextureManager::LoadMapTexture(const char* p) { if (p && p[0]) { strcpy_s(s_CurrentMap.imagePath, p); return true; } return false; }
-Vec2 MapTextureManager::GameToMapCoords(const Vec3& g) { return Vec2(g.x, g.y); }
+
+Vec2 MapTextureManager::GameToMapCoords(const Vec3& g)
+{
+    return Vec2(g.x, g.y);
+}
+
 Vec2 MapTextureManager::GameToRadarCoords(const Vec3& g, const Vec3& l, float y, float cx, float cy, float s, float z)
 {
-    Vec3 d = g - l; float r = -y * 3.14159f / 180.0f;
-    return Vec2(cx + (d.x * cosf(r) - d.y * sinf(r)) * (s * 0.4f) / (100.0f / z),
-                cy - (d.x * sinf(r) + d.y * cosf(r)) * (s * 0.4f) / (100.0f / z));
+    Vec3 d = g - l;
+    float r = -y * 3.14159f / 180.0f;
+    return Vec2(
+        cx + (d.x * cosf(r) - d.y * sinf(r)) * (s * 0.4f) / (100.0f / z),
+        cy - (d.x * sinf(r) + d.y * cosf(r)) * (s * 0.4f) / (100.0f / z)
+    );
 }
+
 void MapTextureManager::SetMapBounds(const char*, float, float, float, float) {}
 
 // ============================================================================
@@ -723,13 +821,16 @@ void Aimbot::AimAt(const Vec2&, float) {}
 void Aimbot::MoveMouse(int dx, int dy) { HardwareController::MoveMouse(dx, dy); }
 
 // ============================================================================
-// PATTERN SCANNER / DIAGNOSTIC
+// PATTERN SCANNER
 // ============================================================================
 uintptr_t PatternScanner::FindPattern(uintptr_t, size_t, const char*, const char*) { return 0; }
 uintptr_t PatternScanner::ScanModule(const char*, const char*, const char*) { return 0; }
 uintptr_t PatternScanner::ResolveRelative(uintptr_t, int, int) { return 0; }
 bool PatternScanner::UpdateAllOffsets() { s_Scanned = true; return false; }
 
+// ============================================================================
+// DIAGNOSTIC SYSTEM
+// ============================================================================
 const char* DiagnosticSystem::GetErrorString(DiagnosticResult) { return ""; }
 bool DiagnosticSystem::RunAllDiagnostics() { return true; }
 DiagnosticResult DiagnosticSystem::CheckDeviceHandshake() { return DiagnosticResult::SUCCESS; }
@@ -751,6 +852,7 @@ void PlayerManager::Initialize()
     std::lock_guard<std::mutex> lock(s_Mutex);
     s_Players.clear();
     
+    // Create simulated players
     for (int i = 0; i < 12; i++)
     {
         PlayerData p = {};
@@ -780,8 +882,17 @@ void PlayerManager::Initialize()
     s_Initialized = true;
 }
 
-void PlayerManager::Update() { if (!s_Initialized) Initialize(); SimulateUpdate(); }
-void PlayerManager::UpdateWithScatterRegistry() { if (!s_Initialized) Initialize(); SimulateUpdate(); }
+void PlayerManager::Update()
+{
+    if (!s_Initialized) Initialize();
+    SimulateUpdate();
+}
+
+void PlayerManager::UpdateWithScatterRegistry()
+{
+    if (!s_Initialized) Initialize();
+    SimulateUpdate();
+}
 
 void PlayerManager::SimulateUpdate()
 {
@@ -813,8 +924,36 @@ int PlayerManager::GetEnemyCount() { int c = 0; for (auto& p : s_Players) if (p.
 // ============================================================================
 // UTILITIES
 // ============================================================================
-bool WorldToScreen(const Vec3&, Vec2& s, int w, int h) { s = Vec2((float)w/2, (float)h/2); return true; }
-bool WorldToRadar(const Vec3& w, const Vec3& l, float y, Vec2& r, float cx, float cy, float s) { r = MapTextureManager::GameToRadarCoords(w, l, y, cx, cy, s*2, 1); return true; }
-float GetFOVTo(const Vec2& c, const Vec2& t) { return sqrtf((t.x-c.x)*(t.x-c.x) + (t.y-c.y)*(t.y-c.y)); }
-Vec3 CalcAngle(const Vec3& s, const Vec3& d) { Vec3 delta = d - s; float h = sqrtf(delta.x*delta.x + delta.y*delta.y); return Vec3(-atan2f(delta.z, h)*57.3f, atan2f(delta.y, delta.x)*57.3f, 0); }
-void SmoothAngle(Vec3& c, const Vec3& t, float s) { if (s <= 0) s = 1; Vec3 d = t - c; while (d.y > 180) d.y -= 360; while (d.y < -180) d.y += 360; c.x += d.x/s; c.y += d.y/s; }
+bool WorldToScreen(const Vec3&, Vec2& s, int w, int h)
+{
+    s = Vec2((float)w / 2, (float)h / 2);
+    return true;
+}
+
+bool WorldToRadar(const Vec3& w, const Vec3& l, float y, Vec2& r, float cx, float cy, float s)
+{
+    r = MapTextureManager::GameToRadarCoords(w, l, y, cx, cy, s * 2, 1);
+    return true;
+}
+
+float GetFOVTo(const Vec2& c, const Vec2& t)
+{
+    return sqrtf((t.x - c.x) * (t.x - c.x) + (t.y - c.y) * (t.y - c.y));
+}
+
+Vec3 CalcAngle(const Vec3& s, const Vec3& d)
+{
+    Vec3 delta = d - s;
+    float h = sqrtf(delta.x * delta.x + delta.y * delta.y);
+    return Vec3(-atan2f(delta.z, h) * 57.3f, atan2f(delta.y, delta.x) * 57.3f, 0);
+}
+
+void SmoothAngle(Vec3& c, const Vec3& t, float s)
+{
+    if (s <= 0) s = 1;
+    Vec3 d = t - c;
+    while (d.y > 180) d.y -= 360;
+    while (d.y < -180) d.y += 360;
+    c.x += d.x / s;
+    c.y += d.y / s;
+}

@@ -427,8 +427,12 @@ void SmoothAngle(Vec3&, const Vec3&, float);
 // ============================================================================
 // MAIN ENTRY FUNCTIONS (Called from main())
 // ============================================================================
+// Main Entry Functions
 extern bool InitDMA();
 extern bool AutoDetectKMBox();
+extern void RunStartupDiagnostics();
+
+// Status Functions
 extern const char* GetKMBoxStatus();
 extern const char* GetKMBoxFirmware();
 extern bool IsKMBoxConnected();
@@ -438,3 +442,6 @@ extern const char* GetDMADiagnostic();
 extern bool IsDMAMemoryReadable();
 extern void SetBlackOverlayEnabled(bool enabled);
 extern bool IsBlackOverlayEnabled();
+
+// Real DMA Data
+extern std::vector<PlayerData> GetRealEntitiesFromDMA();

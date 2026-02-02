@@ -1,18 +1,17 @@
-// DMA_Engine.cpp - REAL HARDWARE VALIDATION v4.5
-// Real DMA Diagnostic - Real KMBox Handshake - No Fake Data
+// DMA_Engine.cpp - Blurry-Style Professional v5.0
+// Real Hardware Diagnostics - Auto KMBox Lock - No Fake Data
 
 #include "DMA_Engine.hpp"
+#include <iostream>
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
-#include <ctime>
-#include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <chrono>
 #include <thread>
-#include <future>
 #include <atomic>
+#include <vector>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -26,8 +25,6 @@
 #if DMA_ENABLED
 #include "vmmdll.h"
 #pragma comment(lib, "vmmdll.lib")
-// Required libs: vmm.lib, leechcore.lib, FTD3XX.lib
-// Optional: KMBoxNet.lib for network KMBox
 static VMM_HANDLE g_VMMHandle = nullptr;
 static DWORD g_GamePID = 0;
 #endif
@@ -35,18 +32,17 @@ static DWORD g_GamePID = 0;
 // ============================================================================
 // HARDWARE STATUS
 // ============================================================================
-static std::atomic<bool> g_DMA_Online_Internal(false);
+static std::atomic<bool> g_DMA_Active(false);
 static std::atomic<bool> g_DMA_MemoryReadable(false);
-static std::atomic<bool> g_KMBox_Locked_Internal(false);
-static std::atomic<bool> g_HardwareScanDone_Internal(false);
+static std::atomic<bool> g_KMBox_Active(false);
+static std::atomic<bool> g_HWScanComplete(false);
+static std::atomic<bool> g_BlackOverlayActive(false);
+
 static char g_DMA_StatusStr[64] = "OFFLINE";
 static char g_DMA_DiagnosticStr[128] = "Not checked";
 static char g_KMBox_StatusStr[64] = "NOT FOUND";
 static char g_KMBox_FirmwareStr[64] = "";
 static char g_LockedCOMPort[16] = "";
-
-// Black Overlay State
-static std::atomic<bool> g_BlackOverlayEnabled(false);
 
 // ============================================================================
 // GLOBAL INSTANCES
@@ -107,322 +103,191 @@ int Aimbot::s_CurrentTarget = -1;
 Vec2 Aimbot::s_LastAimPos = {0, 0};
 
 // ============================================================================
-// LOGGER - SILENT
+// HARDWARE MANAGER CLASS - Blurry-Style Diagnostics
 // ============================================================================
-void Logger::Initialize() { s_Initialized = true; }
-void Logger::Shutdown() { s_Initialized = false; }
-void Logger::ShowConsole() {}
-void Logger::HideConsole() {}
-void Logger::SetColor(ConsoleColor) {}
-void Logger::ResetColor() {}
-void Logger::Log(const char*, ConsoleColor) {}
-void Logger::LogSuccess(const char*) {}
-void Logger::LogError(const char*) {}
-void Logger::LogWarning(const char*) {}
-void Logger::LogInfo(const char*) {}
-void Logger::LogStatus(const char*, const char*, bool) {}
-void Logger::LogProgress(const char*, int, int) {}
-void Logger::LogBanner() {}
-void Logger::LogSection(const char*) {}
-void Logger::LogSeparator() {}
-void Logger::LogTimestamp() {}
-void Logger::LogSpinner(const char*, int) {}
-void Logger::ClearLine() {}
-
-// ============================================================================
-// BLACK OVERLAY CONTROL
-// ============================================================================
-void SetBlackOverlayEnabled(bool enabled)
-{
-    g_BlackOverlayEnabled = enabled;
-}
-
-bool IsBlackOverlayEnabled()
-{
-    return g_BlackOverlayEnabled.load();
-}
-
-// ============================================================================
-// REAL DMA DIAGNOSTIC - Attempts to read GameBaseAddress
-// ============================================================================
-bool PerformRealDMADiagnostic()
-{
+class HardwareManager {
+public:
+    static bool dma_active;
+    static bool kmbox_active;
+    static char locked_port[16];
+    
+    // فحص الـ DMA الحقيقي
+    static bool InitDMAPhysicalDevice()
+    {
 #if DMA_ENABLED
-    if (g_VMMHandle == NULL)
-    {
-        strcpy_s(g_DMA_DiagnosticStr, "DMA DEVICE NOT INITIALIZED");
-        g_DMA_MemoryReadable = false;
-        return false;
-    }
-    
-    if (g_GamePID == 0)
-    {
-        strcpy_s(g_DMA_DiagnosticStr, "GAME PROCESS NOT FOUND");
-        g_DMA_MemoryReadable = false;
-        return false;
-    }
-    
-    // Try to read GameBaseAddress
-    uintptr_t testAddress = DMAEngine::s_BaseAddress;
-    if (testAddress == 0)
-        testAddress = 0x140000000; // Default x64 base
-    
-    // Attempt to read MZ header to verify memory is readable
-    char header[2] = {0, 0};
-    DWORD bytesRead = 0;
-    
-    bool success = VMMDLL_MemReadEx(g_VMMHandle, g_GamePID, testAddress, 
-                                     (PBYTE)header, 2, &bytesRead, VMMDLL_FLAG_NOCACHE);
-    
-    if (!success || bytesRead != 2)
-    {
-        strcpy_s(g_DMA_DiagnosticStr, "DMA DATA ERROR: MEMORY NOT READABLE");
-        g_DMA_MemoryReadable = false;
-        return false;
-    }
-    
-    // Check for MZ header (PE executable)
-    if (header[0] != 'M' || header[1] != 'Z')
-    {
-        strcpy_s(g_DMA_DiagnosticStr, "DMA DATA ERROR: INVALID PE HEADER");
-        g_DMA_MemoryReadable = false;
-        return false;
-    }
-    
-    // Memory is readable!
-    snprintf(g_DMA_DiagnosticStr, sizeof(g_DMA_DiagnosticStr),
-             "MEMORY READABLE @ 0x%llX", (unsigned long long)testAddress);
-    g_DMA_MemoryReadable = true;
-    return true;
-#else
-    strcpy_s(g_DMA_DiagnosticStr, "DMA DISABLED IN BUILD");
-    g_DMA_MemoryReadable = false;
-    return false;
-#endif
-}
-
-const char* GetDMADiagnostic()
-{
-    return g_DMA_DiagnosticStr;
-}
-
-bool IsDMAMemoryReadable()
-{
-    return g_DMA_MemoryReadable.load();
-}
-
-// ============================================================================
-// INIT DMA - REAL HARDWARE CHECK
-// ============================================================================
-bool InitDMA()
-{
-#if DMA_ENABLED
-    char arg0[] = "";
-    char arg1[] = "-device";
-    char arg2[] = "fpga";
-    char* args[3] = {arg0, arg1, arg2};
-    
-    g_VMMHandle = VMMDLL_Initialize(3, args);
-    
-    if (g_VMMHandle == NULL)
-    {
-        g_DMA_Online_Internal = false;
-        strcpy_s(g_DMA_StatusStr, "OFFLINE - FPGA NOT FOUND");
-        strcpy_s(DMAEngine::s_StatusText, "OFFLINE");
-        strcpy_s(DMAEngine::s_DeviceInfo, "DMA HARDWARE NOT RESPONDING");
-        strcpy_s(g_DMA_DiagnosticStr, "FPGA DEVICE NOT DETECTED");
-        DMAEngine::s_Connected = false;
-        DMAEngine::s_Online = false;
-        return false;
-    }
-    
-    g_DMA_Online_Internal = true;
-    strcpy_s(g_DMA_StatusStr, "ONLINE - FPGA CONNECTED");
-    strcpy_s(DMAEngine::s_StatusText, "ONLINE");
-    strcpy_s(DMAEngine::s_DeviceInfo, "FPGA Connected");
-    DMAEngine::s_Connected = true;
-    DMAEngine::s_Online = true;
-    
-    // Find game process
-    DWORD pid = 0;
-    const char* gameNames[] = {"cod.exe", "BlackOps6.exe", "ModernWarfare.exe", "bo6.exe"};
-    
-    for (const char* gameName : gameNames)
-    {
-        if (VMMDLL_PidGetFromName(g_VMMHandle, (LPSTR)gameName, &pid) && pid != 0)
-        {
-            g_GamePID = pid;
-            DMAEngine::s_BaseAddress = 0x140000000;
-            g_InitStatus.gameFound = true;
-            g_Offsets.EntityList = DMAEngine::s_BaseAddress + 0x16D5C000;
-            g_Offsets.ClientInfo = DMAEngine::s_BaseAddress + 0x16D58000;
-            g_Offsets.LocalPlayer = DMAEngine::s_BaseAddress + 0x16D5A000;
-            break;
-        }
-    }
-    
-    // Perform real diagnostic
-    PerformRealDMADiagnostic();
-    
-    return true;
-#else
-    g_DMA_Online_Internal = false;
-    strcpy_s(g_DMA_StatusStr, "OFFLINE - DMA DISABLED");
-    strcpy_s(g_DMA_DiagnosticStr, "DMA DISABLED IN BUILD CONFIG");
-    return false;
-#endif
-}
-
-// ============================================================================
-// REAL KMBOX HANDSHAKE - Expects firmware version response
-// ============================================================================
-bool SendKMBoxVersionCommand(HANDLE hPort, char* firmwareOut, size_t firmwareSize)
-{
-#ifdef _WIN32
-    if (hPort == INVALID_HANDLE_VALUE || hPort == nullptr)
-        return false;
-    
-    // Clear buffers
-    PurgeComm(hPort, PURGE_RXCLEAR | PURGE_TXCLEAR);
-    
-    // Send version command
-    const char* versionCmd = "km.version()\r\n";
-    DWORD written = 0;
-    
-    if (!WriteFile(hPort, versionCmd, (DWORD)strlen(versionCmd), &written, nullptr))
-        return false;
-    
-    if (written != strlen(versionCmd))
-        return false;
-    
-    // Wait for response
-    Sleep(150);
-    
-    // Read response
-    char response[128] = {};
-    DWORD bytesRead = 0;
-    
-    if (!ReadFile(hPort, response, sizeof(response) - 1, &bytesRead, nullptr))
-        return false;
-    
-    if (bytesRead == 0)
-        return false;  // No response = FAKE or not responding
-    
-    response[bytesRead] = 0;
-    
-    // Check if response contains firmware version info
-    // Real KMBox returns something like "km v1.2.3" or similar
-    if (strstr(response, "km") != nullptr || 
-        strstr(response, "KM") != nullptr ||
-        strstr(response, "version") != nullptr ||
-        strstr(response, "v") != nullptr)
-    {
-        // Extract firmware version
-        if (firmwareOut && firmwareSize > 0)
-        {
-            // Clean up response
-            char* clean = response;
-            while (*clean && (*clean == '\r' || *clean == '\n' || *clean == ' '))
-                clean++;
-            strncpy_s(firmwareOut, firmwareSize, clean, _TRUNCATE);
-            
-            // Remove trailing whitespace
-            size_t len = strlen(firmwareOut);
-            while (len > 0 && (firmwareOut[len-1] == '\r' || firmwareOut[len-1] == '\n' || firmwareOut[len-1] == ' '))
-                firmwareOut[--len] = 0;
-        }
-        return true;
-    }
-    
-    // Response doesn't look like valid firmware
-    return false;
-#else
-    return false;
-#endif
-}
-
-// ============================================================================
-// AUTO-DETECT KMBOX - REAL HARDWARE HANDSHAKE
-// ============================================================================
-bool AutoDetectKMBox()
-{
-#ifdef _WIN32
-    // Try saved config first
-    std::ifstream configFile("config.ini");
-    if (configFile.is_open())
-    {
-        std::string line;
-        char savedPort[16] = {};
+        std::cout << "[*] Checking DMA Physical Device..." << std::endl;
         
-        while (std::getline(configFile, line))
-        {
-            if (line.find("KMBoxPort=") == 0)
-            {
-                strncpy_s(savedPort, line.substr(10).c_str(), sizeof(savedPort) - 1);
-                char* nl = strchr(savedPort, '\r'); if (nl) *nl = 0;
-                nl = strchr(savedPort, '\n'); if (nl) *nl = 0;
-            }
-        }
-        configFile.close();
+        char arg0[] = "";
+        char arg1[] = "-device";
+        char arg2[] = "fpga";
+        char* args[3] = {arg0, arg1, arg2};
         
-        if (savedPort[0] != 0)
+        g_VMMHandle = VMMDLL_Initialize(3, args);
+        
+        if (g_VMMHandle != NULL)
         {
-            char fullPath[32];
-            snprintf(fullPath, sizeof(fullPath), "\\\\.\\%s", savedPort);
+            dma_active = true;
+            g_DMA_Active = true;
+            strcpy_s(g_DMA_StatusStr, "ONLINE");
+            strcpy_s(DMAEngine::s_StatusText, "ONLINE");
+            strcpy_s(DMAEngine::s_DeviceInfo, "FPGA Physical Device");
+            DMAEngine::s_Connected = true;
+            DMAEngine::s_Online = true;
             
-            HANDLE hPort = CreateFileA(fullPath, GENERIC_READ | GENERIC_WRITE,
-                                        0, nullptr, OPEN_EXISTING, 0, nullptr);
+            std::cout << "[+] DMA Physical Device: ONLINE" << std::endl;
             
-            if (hPort != INVALID_HANDLE_VALUE)
+            // Find game process
+            const char* gameNames[] = {"cod.exe", "BlackOps6.exe", "ModernWarfare.exe"};
+            DWORD pid = 0;
+            
+            for (const char* name : gameNames)
             {
-                DCB dcb = {};
-                dcb.DCBlength = sizeof(DCB);
-                GetCommState(hPort, &dcb);
-                dcb.BaudRate = 115200;
-                dcb.ByteSize = 8;
-                dcb.Parity = NOPARITY;
-                dcb.StopBits = ONESTOPBIT;
-                dcb.fDtrControl = DTR_CONTROL_ENABLE;
-                SetCommState(hPort, &dcb);
-                
-                COMMTIMEOUTS timeouts = {};
-                timeouts.ReadIntervalTimeout = 50;
-                timeouts.ReadTotalTimeoutConstant = 200;
-                SetCommTimeouts(hPort, &timeouts);
-                
-                // REAL HANDSHAKE - Get firmware version
-                char firmware[64] = {};
-                if (SendKMBoxVersionCommand(hPort, firmware, sizeof(firmware)))
+                if (VMMDLL_PidGetFromName(g_VMMHandle, (LPSTR)name, &pid) && pid != 0)
                 {
-                    HardwareController::s_Handle = hPort;
-                    HardwareController::s_Connected = true;
-                    HardwareController::s_Type = ControllerType::KMBOX_B_PLUS;
-                    strcpy_s(HardwareController::s_LockedPort, savedPort);
-                    strcpy_s(g_LockedCOMPort, savedPort);
-                    snprintf(HardwareController::s_DeviceName, sizeof(HardwareController::s_DeviceName),
-                             "KMBox [%s]", savedPort);
-                    g_KMBox_Locked_Internal = true;
-                    strcpy_s(g_KMBox_StatusStr, "CONNECTED");
-                    strcpy_s(g_KMBox_FirmwareStr, firmware);
-                    return true;
+                    g_GamePID = pid;
+                    DMAEngine::s_BaseAddress = 0x140000000;
+                    g_InitStatus.gameFound = true;
+                    g_Offsets.EntityList = DMAEngine::s_BaseAddress + 0x16D5C000;
+                    g_Offsets.LocalPlayer = DMAEngine::s_BaseAddress + 0x16D5A000;
+                    std::cout << "[+] Game Process Found: " << name << " (PID: " << pid << ")" << std::endl;
+                    break;
                 }
-                CloseHandle(hPort);
             }
+            
+            // Verify memory is readable
+            VerifyMemoryReadable();
+            
+            return true;
         }
+        
+        std::cout << "[-] DMA Physical Device: OFFLINE" << std::endl;
+#endif
+        dma_active = false;
+        g_DMA_Active = false;
+        strcpy_s(g_DMA_StatusStr, "OFFLINE");
+        strcpy_s(g_DMA_DiagnosticStr, "FPGA NOT DETECTED");
+        return false;
     }
     
-    // Scan all COM ports (1-20)
-    for (int portNum = 1; portNum <= 20; portNum++)
+    // التحقق من قراءة الذاكرة
+    static bool VerifyMemoryReadable()
     {
+#if DMA_ENABLED
+        if (g_VMMHandle == NULL || g_GamePID == 0)
+        {
+            strcpy_s(g_DMA_DiagnosticStr, "NO GAME PROCESS");
+            g_DMA_MemoryReadable = false;
+            return false;
+        }
+        
+        uintptr_t baseAddr = DMAEngine::s_BaseAddress;
+        if (baseAddr == 0) baseAddr = 0x140000000;
+        
+        char header[2] = {0};
+        DWORD bytesRead = 0;
+        
+        bool success = VMMDLL_MemReadEx(g_VMMHandle, g_GamePID, baseAddr,
+                                         (PBYTE)header, 2, &bytesRead, VMMDLL_FLAG_NOCACHE);
+        
+        if (!success || bytesRead != 2)
+        {
+            strcpy_s(g_DMA_DiagnosticStr, "DMA DATA ERROR: MEMORY NOT READABLE");
+            g_DMA_MemoryReadable = false;
+            std::cout << "[-] Memory Read: FAILED" << std::endl;
+            return false;
+        }
+        
+        if (header[0] != 'M' || header[1] != 'Z')
+        {
+            strcpy_s(g_DMA_DiagnosticStr, "DMA DATA ERROR: INVALID PE HEADER");
+            g_DMA_MemoryReadable = false;
+            std::cout << "[-] PE Header: INVALID" << std::endl;
+            return false;
+        }
+        
+        snprintf(g_DMA_DiagnosticStr, sizeof(g_DMA_DiagnosticStr),
+                 "MEMORY OK @ 0x%llX", (unsigned long long)baseAddr);
+        g_DMA_MemoryReadable = true;
+        std::cout << "[+] Memory Readable: OK" << std::endl;
+        return true;
+#else
+        return false;
+#endif
+    }
+    
+    // البحث التلقائي عن KMBox
+    static bool AutoLockKMBox()
+    {
+#ifdef _WIN32
+        std::cout << "[*] Scanning for KMBox..." << std::endl;
+        
+        // Try saved config first
+        std::ifstream cfg("config.ini");
+        if (cfg.is_open())
+        {
+            std::string line;
+            while (std::getline(cfg, line))
+            {
+                if (line.find("KMBoxPort=") == 0)
+                {
+                    std::string savedPort = line.substr(10);
+                    while (!savedPort.empty() && (savedPort.back() == '\r' || savedPort.back() == '\n'))
+                        savedPort.pop_back();
+                    
+                    if (TryConnectKMBox(savedPort.c_str()))
+                    {
+                        std::cout << "[+] KMBox Hardware: AUTO-LOCKED on " << savedPort << " (from config)" << std::endl;
+                        return true;
+                    }
+                }
+            }
+            cfg.close();
+        }
+        
+        // Scan COM1-COM20
+        for (int i = 1; i <= 20; i++)
+        {
+            char port[16];
+            snprintf(port, sizeof(port), "COM%d", i);
+            
+            if (TryConnectKMBox(port))
+            {
+                std::cout << "[+] KMBox Hardware: AUTO-LOCKED on " << port << std::endl;
+                
+                // Save to config
+                std::ofstream save("config.ini");
+                if (save.is_open())
+                {
+                    save << "[Hardware]\nKMBoxPort=" << port << "\n";
+                    save.close();
+                }
+                
+                return true;
+            }
+        }
+        
+        std::cout << "[-] KMBox: NOT FOUND or FAKE" << std::endl;
+#endif
+        kmbox_active = false;
+        g_KMBox_Active = false;
+        strcpy_s(g_KMBox_StatusStr, "NOT FOUND");
+        return false;
+    }
+    
+    // محاولة الاتصال بـ KMBox
+    static bool TryConnectKMBox(const char* portName)
+    {
+#ifdef _WIN32
         char fullPath[32];
-        snprintf(fullPath, sizeof(fullPath), "\\\\.\\COM%d", portNum);
+        snprintf(fullPath, sizeof(fullPath), "\\\\.\\%s", portName);
         
         HANDLE hPort = CreateFileA(fullPath, GENERIC_READ | GENERIC_WRITE,
                                     0, nullptr, OPEN_EXISTING, 0, nullptr);
         
         if (hPort == INVALID_HANDLE_VALUE)
-            continue;
+            return false;
         
+        // Configure serial
         DCB dcb = {};
         dcb.DCBlength = sizeof(DCB);
         GetCommState(hPort, &dcb);
@@ -436,65 +301,134 @@ bool AutoDetectKMBox()
         if (!SetCommState(hPort, &dcb))
         {
             CloseHandle(hPort);
-            continue;
+            return false;
         }
         
         COMMTIMEOUTS timeouts = {};
         timeouts.ReadIntervalTimeout = 50;
         timeouts.ReadTotalTimeoutConstant = 200;
-        timeouts.ReadTotalTimeoutMultiplier = 10;
         SetCommTimeouts(hPort, &timeouts);
         
-        // REAL HANDSHAKE - Get firmware version
-        char firmware[64] = {};
-        if (SendKMBoxVersionCommand(hPort, firmware, sizeof(firmware)))
+        PurgeComm(hPort, PURGE_RXCLEAR | PURGE_TXCLEAR);
+        
+        // Send version command
+        const char* cmd = "km.version()\r\n";
+        DWORD written = 0;
+        WriteFile(hPort, cmd, (DWORD)strlen(cmd), &written, nullptr);
+        
+        Sleep(150);
+        
+        // Read response
+        char response[128] = {};
+        DWORD bytesRead = 0;
+        ReadFile(hPort, response, sizeof(response) - 1, &bytesRead, nullptr);
+        
+        if (bytesRead > 0)
         {
-            // Device responded with firmware version!
-            char portName[16];
-            snprintf(portName, sizeof(portName), "COM%d", portNum);
-            
+            // Device responded!
             HardwareController::s_Handle = hPort;
             HardwareController::s_Connected = true;
             HardwareController::s_Type = ControllerType::KMBOX_B_PLUS;
             strcpy_s(HardwareController::s_LockedPort, portName);
+            strcpy_s(locked_port, portName);
             strcpy_s(g_LockedCOMPort, portName);
             snprintf(HardwareController::s_DeviceName, sizeof(HardwareController::s_DeviceName),
                      "KMBox [%s]", portName);
-            g_KMBox_Locked_Internal = true;
-            strcpy_s(g_KMBox_StatusStr, "CONNECTED");
-            strcpy_s(g_KMBox_FirmwareStr, firmware);
             
-            // Save for next time
-            std::ofstream saveFile("config.ini");
-            if (saveFile.is_open())
-            {
-                saveFile << "[Hardware]\n";
-                saveFile << "KMBoxPort=" << portName << "\n";
-                saveFile.close();
-            }
+            kmbox_active = true;
+            g_KMBox_Active = true;
+            strcpy_s(g_KMBox_StatusStr, "AUTO-LOCKED");
+            
+            // Extract firmware
+            char* clean = response;
+            while (*clean && (*clean == '\r' || *clean == '\n' || *clean == ' ')) clean++;
+            strncpy_s(g_KMBox_FirmwareStr, clean, sizeof(g_KMBox_FirmwareStr) - 1);
             
             return true;
         }
         
         CloseHandle(hPort);
-    }
 #endif
+        return false;
+    }
     
-    // NO DEVICE FOUND or device didn't respond properly
-    g_KMBox_Locked_Internal = false;
-    strcpy_s(g_KMBox_StatusStr, "FAKE OR NOT RESPONDING");
-    strcpy_s(g_KMBox_FirmwareStr, "");
-    return false;
-}
+    // Blurry-Style Startup Diagnostics
+    static void StartupDiagnostics()
+    {
+        std::cout << "\n";
+        std::cout << "========================================" << std::endl;
+        std::cout << "   PROJECT ZERO | Blurry-Style Init" << std::endl;
+        std::cout << "========================================" << std::endl;
+        std::cout << "[*] Starting Hardware Diagnostic...\n" << std::endl;
+        
+        // DMA Check
+        InitDMAPhysicalDevice();
+        
+        // KMBox Auto-Lock
+        AutoLockKMBox();
+        
+        std::cout << "\n[*] Diagnostic Complete." << std::endl;
+        std::cout << "========================================\n" << std::endl;
+        
+        g_HWScanComplete = true;
+    }
+};
+
+// Static members
+bool HardwareManager::dma_active = false;
+bool HardwareManager::kmbox_active = false;
+char HardwareManager::locked_port[16] = "";
 
 // ============================================================================
-// EXTERNAL STATUS
+// LOGGER
 // ============================================================================
+void Logger::Initialize() { s_Initialized = true; }
+void Logger::Shutdown() { s_Initialized = false; }
+void Logger::ShowConsole() {
+#ifdef _WIN32
+    AllocConsole();
+    freopen_s((FILE**)&s_Console, "CONOUT$", "w", stdout);
+    SetConsoleTitleW(L"PROJECT ZERO | Diagnostic Console");
+#endif
+}
+void Logger::HideConsole() {
+#ifdef _WIN32
+    FreeConsole();
+#endif
+}
+void Logger::SetColor(ConsoleColor) {}
+void Logger::ResetColor() {}
+void Logger::Log(const char* msg, ConsoleColor) { std::cout << msg << std::endl; }
+void Logger::LogSuccess(const char* msg) { std::cout << "[+] " << msg << std::endl; }
+void Logger::LogError(const char* msg) { std::cout << "[-] " << msg << std::endl; }
+void Logger::LogWarning(const char* msg) { std::cout << "[!] " << msg << std::endl; }
+void Logger::LogInfo(const char* msg) { std::cout << "[*] " << msg << std::endl; }
+void Logger::LogStatus(const char*, const char*, bool) {}
+void Logger::LogProgress(const char*, int, int) {}
+void Logger::LogBanner() {}
+void Logger::LogSection(const char*) {}
+void Logger::LogSeparator() {}
+void Logger::LogTimestamp() {}
+void Logger::LogSpinner(const char*, int) {}
+void Logger::ClearLine() {}
+
+// ============================================================================
+// EXTERNAL FUNCTIONS
+// ============================================================================
+bool InitDMA() { return HardwareManager::InitDMAPhysicalDevice(); }
+bool AutoDetectKMBox() { return HardwareManager::AutoLockKMBox(); }
+void RunStartupDiagnostics() { HardwareManager::StartupDiagnostics(); }
+
 const char* GetKMBoxStatus() { return g_KMBox_StatusStr; }
 const char* GetKMBoxFirmware() { return g_KMBox_FirmwareStr; }
-bool IsKMBoxConnected() { return g_KMBox_Locked_Internal.load(); }
-bool IsHardwareScanComplete() { return g_HardwareScanDone_Internal.load(); }
-bool IsDMAOnline() { return g_DMA_Online_Internal.load(); }
+bool IsKMBoxConnected() { return g_KMBox_Active.load(); }
+bool IsHardwareScanComplete() { return g_HWScanComplete.load(); }
+bool IsDMAOnline() { return g_DMA_Active.load(); }
+const char* GetDMADiagnostic() { return g_DMA_DiagnosticStr; }
+bool IsDMAMemoryReadable() { return g_DMA_MemoryReadable.load(); }
+
+void SetBlackOverlayEnabled(bool enabled) { g_BlackOverlayActive = enabled; }
+bool IsBlackOverlayEnabled() { return g_BlackOverlayActive.load(); }
 
 // ============================================================================
 // SCATTER READS - FIXED C2664
@@ -537,8 +471,7 @@ void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
     if (!VMMDLL_Scatter_Execute(hScatter))
     {
         VMMDLL_Scatter_CloseHandle(hScatter);
-        for (auto& e : entries)
-            if (e.buffer) memset(e.buffer, 0, e.size);
+        for (auto& e : entries) if (e.buffer) memset(e.buffer, 0, e.size);
         g_DMABusy = false;
         return;
     }
@@ -555,15 +488,75 @@ void ExecuteScatterReads(std::vector<ScatterEntry>& entries)
     VMMDLL_Scatter_CloseHandle(hScatter);
     g_DMABusy = false;
 #else
-    for (auto& e : entries)
-        if (e.buffer) memset(e.buffer, 0, e.size);
+    for (auto& e : entries) if (e.buffer) memset(e.buffer, 0, e.size);
 #endif
+}
+
+// ============================================================================
+// GET REAL ENTITIES FROM DMA
+// ============================================================================
+std::vector<PlayerData> GetRealEntitiesFromDMA()
+{
+    std::vector<PlayerData> entities;
+    
+    if (!g_DMA_Active.load() || !g_DMA_MemoryReadable.load())
+        return entities;
+    
+#if DMA_ENABLED
+    if (g_VMMHandle == NULL || g_GamePID == 0 || g_Offsets.EntityList == 0)
+        return entities;
+    
+    constexpr int MAX_PLAYERS = 155;
+    constexpr uintptr_t ENTITY_SIZE = 0x568;
+    
+    g_ScatterRegistry.Clear();
+    
+    for (int i = 0; i < MAX_PLAYERS; i++)
+    {
+        uintptr_t entityAddr = g_Offsets.EntityList + (i * ENTITY_SIZE);
+        g_ScatterRegistry.RegisterPlayerData(i, entityAddr);
+    }
+    
+    g_ScatterRegistry.ExecuteAll();
+    
+    auto& buffers = g_ScatterRegistry.GetPlayerBuffers();
+    auto& local = PlayerManager::GetLocalPlayer();
+    
+    for (int i = 0; i < (int)buffers.size() && i < MAX_PLAYERS; i++)
+    {
+        auto& buf = buffers[i];
+        
+        if (buf.position.x == 0 && buf.position.y == 0 && buf.position.z == 0)
+            continue;
+        if (buf.health <= 0 || buf.health > 300)
+            continue;
+        
+        PlayerData p = {};
+        p.valid = true;
+        p.index = i;
+        p.origin = buf.position;
+        p.yaw = buf.yaw;
+        p.health = buf.health;
+        p.maxHealth = 100;
+        p.team = buf.team;
+        p.isAlive = (buf.health > 0);
+        p.isEnemy = (buf.team != local.team);
+        
+        Vec3 diff = p.origin - local.origin;
+        p.distance = sqrtf(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z);
+        sprintf_s(p.name, "Player_%d", i);
+        
+        entities.push_back(p);
+    }
+#endif
+    
+    return entities;
 }
 
 // ============================================================================
 // HARDWARE CONTROLLER
 // ============================================================================
-bool HardwareController::Initialize() { return AutoDetectKMBox(); }
+bool HardwareController::Initialize() { return HardwareManager::AutoLockKMBox(); }
 
 void HardwareController::Shutdown()
 {
@@ -571,10 +564,10 @@ void HardwareController::Shutdown()
     if (s_Handle) { CloseHandle(s_Handle); s_Handle = nullptr; }
 #endif
     s_Connected = false;
-    g_KMBox_Locked_Internal = false;
+    g_KMBox_Active = false;
 }
 
-bool HardwareController::IsConnected() { return s_Connected && g_KMBox_Locked_Internal.load(); }
+bool HardwareController::IsConnected() { return s_Connected && g_KMBox_Active.load(); }
 const char* HardwareController::GetDeviceName() { return s_DeviceName; }
 ControllerType HardwareController::GetType() { return s_Type; }
 const char* HardwareController::GetLockedPort() { return s_LockedPort; }
@@ -582,7 +575,7 @@ const char* HardwareController::GetLockedPort() { return s_LockedPort; }
 bool HardwareController::MoveMouse(int dx, int dy)
 {
 #ifdef _WIN32
-    if (s_Connected && s_Handle && g_KMBox_Locked_Internal.load())
+    if (s_Connected && s_Handle && g_KMBox_Active.load())
     {
         char cmd[32];
         snprintf(cmd, sizeof(cmd), "km.move(%d,%d)\r\n", dx, dy);
@@ -611,7 +604,7 @@ bool HardwareController::SocketSend(const char*, int) { return false; }
 // ============================================================================
 // DMA ENGINE
 // ============================================================================
-bool DMAEngine::Initialize() { return InitDMA(); }
+bool DMAEngine::Initialize() { return HardwareManager::InitDMAPhysicalDevice(); }
 bool DMAEngine::InitializeWithConfig(const DMAConfig&) { return Initialize(); }
 bool DMAEngine::InitializeFTD3XX() { return Initialize(); }
 
@@ -623,8 +616,8 @@ void DMAEngine::Shutdown()
     HardwareController::Shutdown();
 }
 
-bool DMAEngine::IsConnected() { return s_Connected || g_DMA_Online_Internal.load(); }
-bool DMAEngine::IsOnline() { return s_Online || g_DMA_Online_Internal.load(); }
+bool DMAEngine::IsConnected() { return s_Connected || g_DMA_Active.load(); }
+bool DMAEngine::IsOnline() { return s_Online || g_DMA_Active.load(); }
 const char* DMAEngine::GetStatus() { return g_DMA_StatusStr; }
 const char* DMAEngine::GetDeviceInfo() { return s_DeviceInfo; }
 const char* DMAEngine::GetDriverMode() { return s_DriverMode; }
@@ -658,11 +651,7 @@ bool DMAEngine::ReadString(uintptr_t addr, char* buf, size_t maxLen)
     return ReadBuffer(addr, buf, maxLen - 1);
 }
 
-void DMAEngine::ExecuteScatter(std::vector<ScatterEntry>& entries)
-{
-    ExecuteScatterReads(entries);
-}
-
+void DMAEngine::ExecuteScatter(std::vector<ScatterEntry>& entries) { ExecuteScatterReads(entries); }
 uintptr_t DMAEngine::GetBaseAddress() { return s_BaseAddress; }
 uintptr_t DMAEngine::GetModuleBase(const wchar_t*) { return s_BaseAddress; }
 size_t DMAEngine::GetModuleSize() { return s_ModuleSize; }
@@ -696,7 +685,7 @@ bool OffsetUpdater::HttpGet(const char* url, std::string& response)
     
     if (!WinHttpCrackUrl(urlW, 0, 0, &urlComp)) return false;
     
-    HINTERNET hSession = WinHttpOpen(L"ZeroElite/4.5", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, nullptr, nullptr, 0);
+    HINTERNET hSession = WinHttpOpen(L"ZeroElite/5.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, nullptr, nullptr, 0);
     if (!hSession) return false;
     
     DWORD timeout = 3000;
@@ -709,20 +698,13 @@ bool OffsetUpdater::HttpGet(const char* url, std::string& response)
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", urlPath, nullptr, nullptr, nullptr, flags);
     if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return false; }
     
-    if (!WinHttpSendRequest(hRequest, nullptr, 0, nullptr, 0, 0, 0) ||
-        !WinHttpReceiveResponse(hRequest, nullptr))
-    {
-        WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
-        return false;
-    }
+    if (!WinHttpSendRequest(hRequest, nullptr, 0, nullptr, 0, 0, 0) || !WinHttpReceiveResponse(hRequest, nullptr))
+    { WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return false; }
     
     char buffer[4096];
     DWORD bytesRead;
     while (WinHttpReadData(hRequest, buffer, sizeof(buffer) - 1, &bytesRead) && bytesRead > 0)
-    {
-        buffer[bytesRead] = 0;
-        response += buffer;
-    }
+    { buffer[bytesRead] = 0; response += buffer; }
     
     WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
     return !response.empty();
@@ -804,17 +786,7 @@ bool OffsetUpdater::ApplyOffsets(const RemoteOffsets& o)
 // ============================================================================
 // PROFESSIONAL INIT
 // ============================================================================
-bool ProfessionalInit::RunProfessionalChecks()
-{
-    memset(&g_InitStatus, 0, sizeof(g_InitStatus));
-    g_InitStatus.dmaConnected = InitDMA();
-    g_InitStatus.controllerConnected = AutoDetectKMBox();
-    std::thread([]() { OffsetUpdater::SyncWithCloud(2, 1000); }).detach();
-    g_HardwareScanDone_Internal = true;
-    g_InitStatus.allChecksPassed = true;
-    return true;
-}
-
+bool ProfessionalInit::RunProfessionalChecks() { HardwareManager::StartupDiagnostics(); return true; }
 void ProfessionalInit::SimulateDelay(int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
 bool ProfessionalInit::CheckDMAConnection() { return g_VMMHandle != nullptr; }
 bool ProfessionalInit::CheckMemoryMap() { return true; }
@@ -884,16 +856,13 @@ void Aimbot::AimAt(const Vec2&, float) {}
 void Aimbot::MoveMouse(int dx, int dy) { HardwareController::MoveMouse(dx, dy); }
 
 // ============================================================================
-// PATTERN SCANNER
+// PATTERN SCANNER & DIAGNOSTICS
 // ============================================================================
 uintptr_t PatternScanner::FindPattern(uintptr_t, size_t, const char*, const char*) { return 0; }
 uintptr_t PatternScanner::ScanModule(const char*, const char*, const char*) { return 0; }
 uintptr_t PatternScanner::ResolveRelative(uintptr_t, int, int) { return 0; }
 bool PatternScanner::UpdateAllOffsets() { s_Scanned = true; return false; }
 
-// ============================================================================
-// DIAGNOSTIC SYSTEM
-// ============================================================================
 const char* DiagnosticSystem::GetErrorString(DiagnosticResult) { return ""; }
 bool DiagnosticSystem::RunAllDiagnostics() { return true; }
 DiagnosticResult DiagnosticSystem::CheckDeviceHandshake() { return DiagnosticResult::SUCCESS; }
@@ -916,7 +885,6 @@ void PlayerManager::Initialize()
     s_Players.clear();
     s_Players.reserve(155);
     s_LocalPlayer = {};
-    s_LocalPlayer.valid = false;
     s_Initialized = true;
 }
 
@@ -927,41 +895,28 @@ void PlayerManager::Update()
 }
 
 void PlayerManager::UpdateWithScatterRegistry() { RealUpdate(); }
-void PlayerManager::SimulateUpdate() { /* REMOVED - NO FAKE DATA */ }
+void PlayerManager::SimulateUpdate() { /* REMOVED */ }
 
 void PlayerManager::RealUpdate()
 {
-    // Only use real DMA data - No drawing if Black Overlay is not active
-    if (!g_BlackOverlayEnabled.load())
+    // No drawing if overlay not active
+    if (!g_BlackOverlayActive.load())
     {
         std::lock_guard<std::mutex> lock(s_Mutex);
         s_Players.clear();
-        s_LocalPlayer.valid = false;
         return;
     }
     
-    if (!g_DMA_Online_Internal.load() || !g_DMA_MemoryReadable.load())
-    {
-        std::lock_guard<std::mutex> lock(s_Mutex);
-        s_Players.clear();
-        s_LocalPlayer.valid = false;
-        return;
-    }
-    
-#if DMA_ENABLED
-    if (g_VMMHandle == NULL || g_GamePID == 0)
-    {
-        std::lock_guard<std::mutex> lock(s_Mutex);
-        s_Players.clear();
-        s_LocalPlayer.valid = false;
-        return;
-    }
+    // Get real entities from DMA
+    auto entities = GetRealEntitiesFromDMA();
     
     std::lock_guard<std::mutex> lock(s_Mutex);
+    s_Players = entities;
     
-    // Read LocalPlayer
-    if (g_Offsets.LocalPlayer != 0)
+    // Update local player
+    if (g_DMA_Active.load() && g_Offsets.LocalPlayer != 0)
     {
+#if DMA_ENABLED
         uintptr_t localAddr = DMAEngine::Read<uintptr_t>(g_Offsets.LocalPlayer);
         if (localAddr != 0)
         {
@@ -971,61 +926,8 @@ void PlayerManager::RealUpdate()
             s_LocalPlayer.team = DMAEngine::Read<int>(localAddr + GameOffsets::EntityTeam);
             s_LocalPlayer.valid = true;
         }
-    }
-    
-    s_Players.clear();
-    
-    if (g_Offsets.EntityList == 0)
-        return;
-    
-    g_ScatterRegistry.Clear();
-    
-    constexpr int MAX_PLAYERS = 155;
-    constexpr uintptr_t ENTITY_SIZE = 0x568;
-    
-    for (int i = 0; i < MAX_PLAYERS; i++)
-    {
-        uintptr_t entityAddr = g_Offsets.EntityList + (i * ENTITY_SIZE);
-        g_ScatterRegistry.RegisterPlayerData(i, entityAddr);
-    }
-    
-    g_ScatterRegistry.ExecuteAll();
-    
-    auto& buffers = g_ScatterRegistry.GetPlayerBuffers();
-    
-    for (int i = 0; i < (int)buffers.size() && i < MAX_PLAYERS; i++)
-    {
-        auto& buf = buffers[i];
-        
-        if (buf.position.x == 0 && buf.position.y == 0 && buf.position.z == 0)
-            continue;
-        
-        if (buf.health <= 0 || buf.health > 300)
-            continue;
-        
-        PlayerData p = {};
-        p.valid = true;
-        p.index = i;
-        p.origin = buf.position;
-        p.yaw = buf.yaw;
-        p.health = buf.health;
-        p.maxHealth = 100;
-        p.team = buf.team;
-        p.isAlive = (buf.health > 0);
-        p.isEnemy = (buf.team != s_LocalPlayer.team);
-        
-        Vec3 diff = p.origin - s_LocalPlayer.origin;
-        p.distance = sqrtf(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z);
-        
-        sprintf_s(p.name, "Player_%d", i);
-        
-        s_Players.push_back(p);
-    }
-#else
-    std::lock_guard<std::mutex> lock(s_Mutex);
-    s_Players.clear();
-    s_LocalPlayer.valid = false;
 #endif
+    }
 }
 
 std::vector<PlayerData>& PlayerManager::GetPlayers() { return s_Players; }

@@ -48,9 +48,10 @@ struct DMAConfig {
     char deviceName[64] = "fpga";
     char processName[64] = "cod.exe";
     wchar_t processNameW[64] = L"cod.exe";
-    int manualPID = 0;
+    uint32_t manualPID = 0;
     uint32_t pid = 0;
     uintptr_t handle = 0;
+    uint64_t dtb = 0;
     bool useFTD3XX = true;
     bool useScatterReads = true;
     bool useScatterRegistry = true;
@@ -433,6 +434,8 @@ public:
 class ProfessionalInit {
 public:
     static bool RunProfessionalChecks();
+    static bool ScanForGameSignature(uint32_t& out_pid, uintptr_t& out_baseAddress, uint64_t& out_dtb);
+    static bool Step_GameSync();
     static void SimulateDelay(int);
     static bool CheckDMAConnection();
     static bool CheckMemoryMap();
@@ -445,6 +448,8 @@ public:
     static bool Step_CheckOffsetUpdates();
     static bool Step_ConnectController();
     static bool Step_ConnectDMA();
+    static bool Step_InitializeDMA();
+    static bool Step_InitializeController();
     static bool Step_WaitForGame();
     static bool Step_CheckSystemState();
 };

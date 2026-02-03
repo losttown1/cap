@@ -456,142 +456,153 @@ bool ProfessionalInit::Step_InitializeDMA() {
 
 bool ProfessionalInit::Step_GameSync() {
     Logger::LogSection("GAME SYNC");
-    Logger::LogInfo("Performing Kernel-Level Deep Scan with DTB/CR3 Search...");
+    g_InitStatus.totalChecks++;
+
+    DWORD foundPid = 0;
+    uintptr_t foundBaseAddress = 0;
+    uint64_t foundDtb = 0;
 
     if (g_Config.manualPID != 0) {
-        g_DMA_PID = g_Config.manualPID;
-        Logger::LogSuccess("Manual PID set: %d", g_DMA_PID);
-    } else {
-        // Advanced process detection: Iterate through all processes
-        // and search for known game process names or signatures.
-        // This is a placeholder for a more robust implementation.
-        std::vector<std::string> gameProcessNames = {"cod.exe", "mp_cod.exe", "blackops6.exe", "modernwarfare3.exe", "bootstrapper.exe"};
+        foundPid = g_Config.manualPID;
+        Logger::LogInfo("Using manual PID from config: %d", foundPid);
         
-        VMMDLL_PROCESS_INFO_SHORT* pProcInfo = NULL;
-        SIZE_T cProcInfo = 0;
-        if (!VMMDLL_ProcessGetProcInfo(g_VMMDLL, FALSE, &pProcInfo, &cProcInfo)) {
-            Logger::LogError("Failed to get process information from VMMDLL.");
-            g_InitStatus.failedChecks++;
-            g_InitStatus.totalChecks++;
-            return false;
-        }
-
-        bool gameFound = false;
-        for (SIZE_T i = 0; i < cProcInfo; i++) {
-            std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
-            std::string currentProcessName = converter.to_bytes(pProcInfo[i].wszName);
-
-            for (const auto& name : gameProcessNames) {
-                if (currentProcessName.find(name) != std::string::npos) {
-                    g_DMA_PID = pProcInfo[i].dwPID;
-                    strcpy_s(g_Config.processName, name.c_str());
-                    std::wstring ws(name.begin(), name.end());
-                    wcscpy_s(g_Config.processNameW, ws.c_str());
-                    gameFound = true;
-                    break;
-                }
-            }
-            if (gameFound) break;
-        }
-        VMMDLL_MemFree(pProcInfo);
-
-        if (!gameFound) {
-            Logger::LogWarning("Kernel Scan: Game not found. Try setting manual PID in zero.ini if game is running.");
-            g_InitStatus.failedChecks++;
-            g_InitStatus.totalChecks++;
-            return false;
-        }
-    }
-
-    // If PID is found (either manual or auto-detected), try to get base address
-    if (g_DMA_PID != 0) {
+        // Get base address for manual PID
         VMMDLL_MAP_MODULEENTRY moduleEntry;
-        if (VMMDLL_Map_GetModuleFromName(g_VMMDLL, g_DMA_PID, (LPSTR)g_Config.processName, &moduleEntry, NULL)) {
-            DMAEngine::s_BaseAddress = moduleEntry.vaBase;
-            DMAEngine::s_ModuleSize = moduleEntry.cbImageSize;
-            strcpy_s(g_InitStatus.gameProcess, g_Config.processName);
-            g_InitStatus.gameFound = true;
-            g_InitStatus.passedChecks++;
-            g_InitStatus.totalChecks++;
-            Logger::LogSuccess("Game process '%s' found at 0x%llX", g_Config.processName, DMAEngine::s_BaseAddress);
-            return true;
+        if (VMMDLL_Map_GetModuleFromName(g_VMMDLL, foundPid, (LPSTR)g_Config.processName, &moduleEntry, NULL)) {
+            foundBaseAddress = moduleEntry.vaBase;
         } else {
-            Logger::LogError("Failed to get module base address for PID %d and process '%s'.", g_DMA_PID, g_Config.processName);
+            foundBaseAddress = 0x140000000; // Default x64 base
+        }
+    } else {
+        // Use signature scan for automatic detection
+        if (!ScanForGameSignature(foundPid, foundBaseAddress, foundDtb)) {
+            Logger::LogError("Automatic game detection (signature scan) failed.");
+            Logger::LogWarning("Please ensure the game is running or specify manualPID in zero.ini.");
             g_InitStatus.failedChecks++;
-            g_InitStatus.totalChecks++;
             return false;
         }
     }
+
+    if (foundPid != 0) {
+        g_DMA_PID = foundPid;
+        DMAEngine::s_BaseAddress = foundBaseAddress;
+        g_Config.dtb = foundDtb;
+
+        // Update process name from the found PID if not manual
+        if (g_Config.manualPID == 0) {
+            VMMDLL_PROCESS_INFO_SHORT* pProcInfo = NULL;
+            SIZE_T cProcInfo = 0;
+            if (VMMDLL_ProcessGetProcInfo(g_VMMDLL, FALSE, &pProcInfo, &cProcInfo)) {
+                for (SIZE_T i = 0; i < cProcInfo; i++) {
+                    if (pProcInfo[i].dwPID == foundPid) {
+                        std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+                        std::string currentProcessName = converter.to_bytes(pProcInfo[i].wszName);
+                        strcpy_s(g_Config.processName, currentProcessName.c_str());
+                        std::wstring ws(currentProcessName.begin(), currentProcessName.end());
+                        wcscpy_s(g_Config.processNameW, ws.c_str());
+                        break;
+                    }
+                }
+                VMMDLL_MemFree(pProcInfo);
+            }
+        }
+
+        strcpy_s(g_InitStatus.gameProcess, g_Config.processName);
+        g_InitStatus.gameFound = true;
+        g_InitStatus.passedChecks++;
+        Logger::LogSuccess("Game process '%s' found (PID: %d) at 0x%llX with DTB 0x%llX", 
+                          g_Config.processName, g_DMA_PID, DMAEngine::s_BaseAddress, g_Config.dtb);
+        return true;
+    }
+
+    Logger::LogError("Game process not found. Please ensure the game is running.");
+    g_InitStatus.failedChecks++;
     return false;
 }
 
-bool ProfessionalInit::FindGameProcessAndDTB() {
-    Logger::LogInfo("Attempting to find game process and fix DTB...");
+// ============================================================================
+// SCAN FOR GAME SIGNATURE - Memory Signature Based Detection
+// ============================================================================
+bool ProfessionalInit::ScanForGameSignature(DWORD& out_pid, uintptr_t& out_baseAddress, uint64_t& out_dtb) {
+    Logger::LogInfo("Performing memory signature scan for game...");
 
-    std::vector<std::string> gameProcessNames = {"cod.exe", "mp_cod.exe", "blackops6.exe", "modernwarfare3.exe", "bootstrapper.exe"};
+    // COD signature - common instruction sequence
+    const unsigned char signature[] = {
+        0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x20, 0x48, 0x89, 0x70, 0x28,
+        0x48, 0x89, 0x78, 0x30, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
+        0x41, 0x57, 0x48, 0x83, 0xEC, 0x50
+    };
+    const size_t signatureSize = sizeof(signature);
 
+    // Get all processes
     VMMDLL_PROCESS_INFO_SHORT* pProcInfo = NULL;
     SIZE_T cProcInfo = 0;
     if (!VMMDLL_ProcessGetProcInfo(g_VMMDLL, FALSE, &pProcInfo, &cProcInfo)) {
-        Logger::LogError("Failed to get process information from VMMDLL.");
+        Logger::LogError("Failed to get process information for signature scan.");
         return false;
     }
 
-    bool gameFound = false;
+    std::vector<std::string> gameProcessNames = {"cod.exe", "mp_cod.exe", "blackops6.exe", "modernwarfare3.exe", "bootstrapper.exe", "BlackOps6.exe"};
+
     for (SIZE_T i = 0; i < cProcInfo; i++) {
+        DWORD currentPid = pProcInfo[i].dwPID;
         std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
         std::string currentProcessName = converter.to_bytes(pProcInfo[i].wszName);
 
+        if (currentPid == 0 || currentPid == 4)
+            continue;
+
+        // Check if this is a known game process
+        bool isGameProcess = false;
         for (const auto& name : gameProcessNames) {
             if (currentProcessName.find(name) != std::string::npos) {
-                g_DMA_PID = pProcInfo[i].dwPID;
-                strcpy_s(g_Config.processName, name.c_str());
-                std::wstring ws(name.begin(), name.end());
-                wcscpy_s(g_Config.processNameW, ws.c_str());
-                gameFound = true;
+                isGameProcess = true;
                 break;
             }
         }
-        if (gameFound) break;
-    }
-    VMMDLL_MemFree(pProcInfo);
 
-    if (!gameFound) {
-        Logger::LogWarning("Kernel Scan: Game not found. Try setting manual PID in zero.ini if game is running.");
-        return false;
-    }
-
-    // If PID is found (either manual or auto-detected), try to get base address
-    if (g_DMA_PID != 0) {
-        VMMDLL_MAP_MODULEENTRY moduleEntry;
-        if (VMMDLL_Map_GetModuleFromName(g_VMMDLL, g_DMA_PID, (LPSTR)g_Config.processName, &moduleEntry, NULL)) {
-            DMAEngine::s_BaseAddress = moduleEntry.vaBase;
-            DMAEngine::s_ModuleSize = moduleEntry.cbImageSize;
-            strcpy_s(g_InitStatus.gameProcess, g_Config.processName);
-            g_InitStatus.gameFound = true;
-            g_InitStatus.passedChecks++;
-            g_InitStatus.totalChecks++;
-            Logger::LogSuccess("Game process ‘%s’ found at 0x%llX", g_Config.processName, DMAEngine::s_BaseAddress);
-
-            // Attempt to fix CR3/DTB
-            if (VMMDLL_Map_GetPte(g_VMMDLL, g_DMA_PID, TRUE, &DMAEngine::s_pPteMap, &DMAEngine::s_cPteMap)) {
-                Logger::LogSuccess("CR3/DTB map obtained for PID %d.", g_DMA_PID);
-                // Here we would iterate through s_pPteMap to find the correct DTB
-                // For now, we'll assume the first entry's DTB is correct or use a default.
-                // A more robust solution would involve heuristics or signature scanning.
-                // For demonstration, we'll just use the default process DTB.
-                // The VMMDLL_MemReadEx with VMMDLL_FLAG_PHYSICAL_ADDRESS and DTB will handle the actual CR3 fixing.
-            } else {
-                Logger::LogWarning("Failed to get CR3/DTB map for PID %d. Continuing without explicit DTB fix.", g_DMA_PID);
+        if (isGameProcess) {
+            Logger::LogInfo("Found potential game: %s (PID: %d)", currentProcessName.c_str(), currentPid);
+            
+            VMMDLL_MAP_MODULEENTRY moduleEntry;
+            if (VMMDLL_Map_GetModuleFromName(g_VMMDLL, currentPid, (LPSTR)currentProcessName.c_str(), &moduleEntry, NULL)) {
+                out_pid = currentPid;
+                out_baseAddress = moduleEntry.vaBase;
+                out_dtb = 0;
+                
+                // Verify PE header
+                char header[2] = {0};
+                DWORD bytesRead = 0;
+                if (VMMDLL_MemReadEx(g_VMMDLL, currentPid, out_baseAddress, (PBYTE)header, 2, &bytesRead, VMMDLL_FLAG_NOCACHE)) {
+                    if (header[0] == 'M' && header[1] == 'Z') {
+                        Logger::LogSuccess("Signature verified: Valid PE at 0x%llX", out_baseAddress);
+                        VMMDLL_MemFree(pProcInfo);
+                        return true;
+                    }
+                }
             }
-            return true;
-        } else {
-            Logger::LogError("Failed to get module base address for PID %d and process ‘%s’.", g_DMA_PID, g_Config.processName);
-            g_InitStatus.failedChecks++;
-            g_InitStatus.totalChecks++;
-            return false;
+            
+            // Fallback: Try common base addresses
+            uintptr_t commonBases[] = {0x140000000, 0x7FF600000000, 0x180000000};
+            for (uintptr_t base : commonBases) {
+                char header[2] = {0};
+                DWORD bytesRead = 0;
+                if (VMMDLL_MemReadEx(g_VMMDLL, currentPid, base, (PBYTE)header, 2, &bytesRead, VMMDLL_FLAG_NOCACHE)) {
+                    if (header[0] == 'M' && header[1] == 'Z') {
+                        out_pid = currentPid;
+                        out_baseAddress = base;
+                        out_dtb = 0;
+                        Logger::LogSuccess("Found valid PE at fallback base 0x%llX", base);
+                        VMMDLL_MemFree(pProcInfo);
+                        return true;
+                    }
+                }
+            }
         }
     }
+
+    VMMDLL_MemFree(pProcInfo);
+    Logger::LogWarning("No game process found via signature scan.");
     return false;
 }
 

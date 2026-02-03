@@ -1,4 +1,4 @@
-// DMA_Engine.cpp - STRICT AUTOMATION v4.3
+// DMA_Engine.cpp - STRICT AUTOMATION v4.4
 // Features: Hardware Controllers, Auto-Offset Updater, FTD3XX, Scatter Registry
 
 #include "DMA_Engine.hpp"
@@ -77,7 +77,7 @@ char HardwareController::s_LockedPort[16] = "";
 RemoteOffsets OffsetUpdater::s_LastOffsets;
 bool OffsetUpdater::s_Updated = false;
 bool OffsetUpdater::s_Synced = false;
-char OffsetUpdater::s_OffsetURL[512] = OffsetUpdater::DEFAULT_OFFSET_URL;
+char OffsetUpdater::s_OffsetURL[512] = "https://raw.githubusercontent.com/offsets/bo6/main/offsets.txt";
 char OffsetUpdater::s_LastError[256] = "";
 
 bool Aimbot::s_Enabled = false;
@@ -463,7 +463,7 @@ bool ProfessionalInit::RunProfessionalChecks()
     if (!Step_ConnectController()) return false;
     if (!Step_ConnectDMA()) return false;
     if (!Step_WaitForGame()) return false;
-    s_Connected = true;
+    DMAEngine::s_Connected = true;
     return true;
 }
 
@@ -515,14 +515,14 @@ bool ProfessionalInit::Step_ConnectDMA()
     g_VMMDLL = VMMDLL_Initialize(3, args);
     if (g_VMMDLL) {
         ULONG64 fpgaId = 0;
-        VMMDLL_ConfigGet(g_VMMDLL, VMMDLL_OPT_FPGA_ID, &fpgaId);
+        VMMDLL_ConfigGet(g_VMMDLL, 0x0001, &fpgaId); // VMMDLL_OPT_FPGA_ID = 1
         if (fpgaId == 0) {
             Logger::LogError("DMA Hardware not found");
             VMMDLL_Close(g_VMMDLL);
             g_VMMDLL = nullptr;
             return false;
         }
-        s_Connected = true;
+        DMAEngine::s_Connected = true;
         Logger::LogSuccess("DMA Connected");
         return true;
     }
@@ -539,7 +539,7 @@ bool ProfessionalInit::Step_WaitForGame()
         DWORD pid = 0;
         if (VMMDLL_PidGetFromName(g_VMMDLL, (char*)g_Config.processName, &pid)) {
             g_DMA_PID = pid;
-            s_BaseAddress = VMMDLL_ProcessGetModuleBase(g_VMMDLL, pid, (char*)g_Config.processName);
+            DMAEngine::s_BaseAddress = VMMDLL_ProcessGetModuleBase(g_VMMDLL, pid, (char*)g_Config.processName);
             Logger::LogSuccess("Game found");
             return true;
         }
@@ -564,7 +564,7 @@ void PlayerManager::Update() { UpdateWithScatterRegistry(); }
 void PlayerManager::UpdateWithScatterRegistry()
 {
 #if DMA_ENABLED
-    if (g_VMMDLL && g_DMA_PID && s_BaseAddress) {
+    if (g_VMMDLL && g_DMA_PID && DMAEngine::s_BaseAddress) {
         // Real update logic here
     }
 #endif

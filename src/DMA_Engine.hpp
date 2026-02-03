@@ -1,4 +1,4 @@
-// DMA_Engine.hpp - STRICT AUTOMATION v4.3
+// DMA_Engine.hpp - STRICT AUTOMATION v4.4
 // Zero Elite - Black Stage Architecture
 
 #pragma once
@@ -12,7 +12,6 @@
 
 #define DMA_ENABLED 1
 #define KMBOX_ENABLED 1
-#define DEFAULT_OFFSET_URL "https://raw.githubusercontent.com/offsets/bo6/main/offsets.txt"
 
 // ============================================================================
 // MATH TYPES
@@ -67,7 +66,8 @@ struct DMAConfig {
     char controllerCOM[16] = "COM3";
     char controllerIP[32] = "192.168.2.188";
     int controllerPort = 8888;
-    char offsetURL[512] = DEFAULT_OFFSET_URL;
+    char offsetURL[512] = "https://raw.githubusercontent.com/offsets/bo6/main/offsets.txt";
+    char mapImagePath[256] = "";
 };
 
 struct GameOffsetsStruct {
@@ -148,6 +148,7 @@ public:
     void Clear();
     int GetTotalBytes() const;
     int GetTransactionCount() const { return m_TransactionCount; }
+    int GetReadCount() const { return (int)m_Entries.size(); }
     std::vector<PlayerRawData>& GetPlayerBuffers() { return m_PlayerBuffers; }
     Vec3 GetLocalPosition() const { return m_LocalPosition; }
     float GetLocalYaw() const { return m_LocalYaw; }
@@ -368,6 +369,8 @@ public:
     static bool ParseOffsetsINI(const char*);
     static bool ParseOffsetsTXT(const char*);
     static bool ApplyOffsets(const RemoteOffsets&);
+    static bool IsUpdated() { return s_Updated; }
+    static const char* GetBuildNumber() { return s_LastOffsets.buildNumber; }
     
     static RemoteOffsets s_LastOffsets;
     static bool s_Updated;
@@ -389,6 +392,9 @@ struct MapInfo {
     float minX = -5000, maxX = 5000;
     float minY = -5000, maxY = 5000;
     int width = 512, height = 512;
+    int imageWidth = 0;
+    int imageHeight = 0;
+    bool hasTexture = false;
 };
 
 class MapTextureManager {
@@ -399,6 +405,8 @@ public:
     static Vec2 GameToMapCoords(const Vec3&);
     static Vec2 GameToRadarCoords(const Vec3&, const Vec3&, float, float, float, float, float);
     static void SetMapBounds(const char*, float, float, float, float);
+    static bool HasMapTexture() { return s_CurrentMap.hasTexture; }
+    static MapInfo& GetCurrentMap() { return s_CurrentMap; }
     
     static MapInfo s_CurrentMap;
     static std::unordered_map<std::string, MapInfo> s_MapDatabase;
@@ -413,6 +421,7 @@ public:
     static uintptr_t ScanModule(const char*, const char*, const char*);
     static uintptr_t ResolveRelative(uintptr_t, int, int);
     static bool UpdateAllOffsets();
+    static int GetFoundCount() { return s_FoundCount; }
     static bool s_Scanned;
     static int s_FoundCount;
 };

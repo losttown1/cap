@@ -318,7 +318,7 @@ bool ProfessionalInit::Step_WaitForGame() {
             if (VMMDLL_PidList(g_VMMDLL, pdwPids, &cPids)) {
                 for (ULONG64 i = 0; i < cPids; i++) {
                     VMMDLL_PROCESS_INFORMATION info;
-                    SIZE_T cbInfo = sizeof(info);
+                    DWORD cbInfo = sizeof(info);
                     if (VMMDLL_ProcessGetInformation(g_VMMDLL, pdwPids[i], &info, &cbInfo)) {
                         std::string procName = info.szNameLong;
                         std::transform(procName.begin(), procName.end(), procName.begin(), ::tolower);

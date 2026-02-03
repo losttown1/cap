@@ -310,17 +310,30 @@ bool ProfessionalInit::Step_WaitForGame() {
 #if DMA_ENABLED
     if (g_VMMDLL) {
         DWORD pid = 0;
-        Logger::LogInfo("Searching for cod.exe...");
-        if (VMMDLL_PidGetFromName(g_VMMDLL, (char*)g_Config.processName, &pid)) {
-            g_DMA_PID = pid;
-            typedef ULONG64(VMMDLL_ProcessGetModuleBase_t)(VMM_HANDLE, DWORD, LPSTR);
-            VMMDLL_ProcessGetModuleBase_t* pGetModuleBase = (VMMDLL_ProcessGetModuleBase_t*)GetProcAddress(GetModuleHandleA("vmm.dll"), "VMMDLL_ProcessGetModuleBase");
-            if (pGetModuleBase) DMAEngine::s_BaseAddress = pGetModuleBase(g_VMMDLL, pid, (char*)g_Config.processName);
-            Logger::LogSuccess("Game found! Synchronization complete."); return true;
+        const char* possibleProcesses[] = { "cod.exe", "Call of Duty.exe", "ModernWarfare.exe" };
+        
+        for (const char* procName : possibleProcesses) {
+            Logger::LogInfo((std::string("Searching for ") + procName + "...").c_str());
+            if (VMMDLL_PidGetFromName(g_VMMDLL, (char*)procName, &pid)) {
+                g_DMA_PID = pid;
+                strcpy_s(g_Config.processName, procName);
+                
+                typedef ULONG64(VMMDLL_ProcessGetModuleBase_t)(VMM_HANDLE, DWORD, LPSTR);
+                VMMDLL_ProcessGetModuleBase_t* pGetModuleBase = (VMMDLL_ProcessGetModuleBase_t*)GetProcAddress(GetModuleHandleA("vmm.dll"), "VMMDLL_ProcessGetModuleBase");
+                
+                if (pGetModuleBase) {
+                    DMAEngine::s_BaseAddress = pGetModuleBase(g_VMMDLL, pid, (char*)procName);
+                    if (DMAEngine::s_BaseAddress) {
+                        Logger::LogSuccess((std::string("Game found on ") + procName + "! Base: " + std::to_string(DMAEngine::s_BaseAddress)).c_str());
+                        return true;
+                    }
+                }
+            }
         }
     }
 #endif
-    Logger::LogWarning("Game not found. Waiting in background..."); return true;
+    Logger::LogWarning("Game not found or Base Address failed. Retrying in background...");
+    return true;
 }
 
 // ============================================================================

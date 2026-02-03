@@ -309,49 +309,61 @@ bool ProfessionalInit::Step_WaitForGame() {
     Logger::LogSection("GAME SYNC");
 #if DMA_ENABLED
     if (g_VMMDLL) {
-        Logger::LogInfo("Performing Ultra Deep Scan with CR3 Fix...");
+        Logger::LogInfo("Performing Kernel-Level Deep Scan with DTB/CR3 Search...");
         
+        // Check for manual PID override in config
+        if (g_Config.manualPID > 0) {
+            Logger::LogInfo((std::string("Using Manual PID Override: ") + std::to_string(g_Config.manualPID)).c_str());
+            g_DMA_PID = g_Config.manualPID;
+        }
+
         PDWORD pdwPids;
         ULONG64 cPids = 0;
         if (VMMDLL_PidList(g_VMMDLL, NULL, &cPids) && cPids > 0) {
             pdwPids = (PDWORD)LocalAlloc(LMEM_ZEROINIT, cPids * sizeof(DWORD));
             if (VMMDLL_PidList(g_VMMDLL, pdwPids, &cPids)) {
                 for (ULONG64 i = 0; i < cPids; i++) {
+                    if (g_Config.manualPID > 0 && pdwPids[i] != g_Config.manualPID) continue;
+
                     VMMDLL_PROCESS_INFORMATION info;
                     DWORD cbInfo = sizeof(info);
                     if (VMMDLL_ProcessGetInformation(g_VMMDLL, pdwPids[i], &info, &cbInfo)) {
                         std::string procName = info.szNameLong;
                         std::transform(procName.begin(), procName.end(), procName.begin(), ::tolower);
                         
-                        // Broad search for CoD and related launchers
-                        if (procName.find("cod") != std::string::npos || 
-                            procName.find("call of duty") != std::string::npos ||
-                            procName.find("modernwarfare") != std::string::npos ||
-                            procName.find("blackops") != std::string::npos ||
-                            procName.find("bootstrapper") != std::string::npos ||
-                            procName.find("launcher") != std::string::npos) 
-                        {
+                        bool isTarget = (procName.find("cod") != std::string::npos || 
+                                       procName.find("call of duty") != std::string::npos ||
+                                       procName.find("modernwarfare") != std::string::npos ||
+                                       procName.find("blackops") != std::string::npos ||
+                                       procName.find("bootstrapper") != std::string::npos ||
+                                       procName.find("mp_") != std::string::npos ||
+                                       procName.find("zm_") != std::string::npos);
+
+                        if (isTarget || pdwPids[i] == g_Config.manualPID) {
                             g_DMA_PID = pdwPids[i];
+                            Logger::LogInfo((std::string("Target Identified: ") + info.szNameLong + " (PID: " + std::to_string(g_DMA_PID) + ")").c_str());
                             
-                            // Attempt CR3 Fix (Auto-EPRO)
-                            Logger::LogInfo((std::string("Attempting CR3 Fix for ") + info.szNameLong + "...").c_str());
-                            
-                            // Define missing constants if not present
+                            // Advanced CR3/DTB Fix
+                            Logger::LogInfo("Applying Advanced DTB/CR3 Kernel Fix...");
                             #ifndef VMMDLL_OPT_PROCESS_DEVICE_READ_RETRY
                             #define VMMDLL_OPT_PROCESS_DEVICE_READ_RETRY 0x0000000200000000ULL
                             #endif
-
+                            
                             typedef BOOL(VMMDLL_ConfigSet_t)(VMM_HANDLE, ULONG64, ULONG64);
                             VMMDLL_ConfigSet_t* pConfigSet = (VMMDLL_ConfigSet_t*)GetProcAddress(GetModuleHandleA("vmm.dll"), "VMMDLL_ConfigSet");
-                            if (pConfigSet) pConfigSet(g_VMMDLL, VMMDLL_OPT_PROCESS_DEVICE_READ_RETRY, 1);
-                            
+                            if (pConfigSet) {
+                                pConfigSet(g_VMMDLL, VMMDLL_OPT_PROCESS_DEVICE_READ_RETRY, 1);
+                                // Force refresh process to fix CR3
+                                pConfigSet(g_VMMDLL, 0x0000000100000000ULL | g_DMA_PID, 1); 
+                            }
+
                             typedef ULONG64(VMMDLL_ProcessGetModuleBase_t)(VMM_HANDLE, DWORD, LPSTR);
                             VMMDLL_ProcessGetModuleBase_t* pGetModuleBase = (VMMDLL_ProcessGetModuleBase_t*)GetProcAddress(GetModuleHandleA("vmm.dll"), "VMMDLL_ProcessGetModuleBase");
                             
                             if (pGetModuleBase) {
                                 DMAEngine::s_BaseAddress = pGetModuleBase(g_VMMDLL, g_DMA_PID, (char*)info.szNameLong);
                                 if (DMAEngine::s_BaseAddress) {
-                                    Logger::LogSuccess((std::string("ULTRA SCAN: Found Game -> ") + info.szNameLong + " (PID: " + std::to_string(g_DMA_PID) + ")").c_str());
+                                    Logger::LogSuccess("KERNEL SYNC: Game Found and CR3 Fixed!");
                                     LocalFree(pdwPids);
                                     return true;
                                 }
@@ -364,7 +376,7 @@ bool ProfessionalInit::Step_WaitForGame() {
         }
     }
 #endif
-    Logger::LogWarning("Ultra Scan: Game not found. Ensure it's running and DMA is connected.");
+    Logger::LogWarning("Kernel Scan: Game not found. Try setting manual PID in zero.ini if game is running.");
     return true;
 }
 

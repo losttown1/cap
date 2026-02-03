@@ -243,7 +243,6 @@ void DMAEngine::Update() { PlayerManager::Update(); Aimbot::Update(); }
 // ============================================================================
 int ScatterReadRegistry::GetTotalBytes() const { return 0; }
 void ScatterReadRegistry::ExecuteAll() {}
-Matrix4x4 ScatterReadRegistry::GetViewMatrix() const { return m_ViewMatrix; }
 
 // ============================================================================
 // PATTERN SCANNER

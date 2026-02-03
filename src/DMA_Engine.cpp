@@ -271,19 +271,39 @@ bool ProfessionalInit::Step_ConnectController() { Logger::LogSection("CONTROLLER
 bool ProfessionalInit::Step_ConnectDMA() {
     Logger::LogSection("DMA HARDWARE");
 #if DMA_ENABLED
-    Logger::LogInfo("Initializing vmm.dll...");
-    char arg0[] = ""; char arg1[] = "-device"; char arg2[] = "fpga"; char* args[] = {arg0, arg1, arg2};
-    g_VMMDLL = VMMDLL_Initialize(3, args);
+    Logger::LogInfo("Initializing vmm.dll with auto-detect...");
+    
+    // Try multiple initialization strings for better compatibility
+    const char* initArgs[] = { "", "-device", "fpga", "-v" };
+    g_VMMDLL = VMMDLL_Initialize(4, (char**)initArgs);
+    
+    if (!g_VMMDLL) {
+        Logger::LogWarning("Primary init failed, trying fallback...");
+        const char* fallbackArgs[] = { "", "-device", "fpga" };
+        g_VMMDLL = VMMDLL_Initialize(3, (char**)fallbackArgs);
+    }
+
     if (g_VMMDLL) {
+        Logger::LogSuccess("vmm.dll initialized successfully");
+        
+        // Check if we can actually communicate with the FPGA
         ULONG64 fpgaId = 0;
         typedef BOOL(VMMDLL_ConfigGet_t)(VMM_HANDLE, ULONG64, PULONG64);
         VMMDLL_ConfigGet_t* pConfigGet = (VMMDLL_ConfigGet_t*)GetProcAddress(GetModuleHandleA("vmm.dll"), "VMMDLL_ConfigGet");
-        if (pConfigGet) pConfigGet(g_VMMDLL, 1, &fpgaId); else fpgaId = 1;
-        if (fpgaId == 0) { Logger::LogError("DMA Hardware not found! Check your card."); return false; }
-        DMAEngine::s_Connected = true; Logger::LogSuccess("DMA Hardware Connected & Verified"); return true;
+        
+        if (pConfigGet && pConfigGet(g_VMMDLL, 1, &fpgaId)) {
+            Logger::LogInfo("FPGA ID Verified");
+        } else {
+            Logger::LogWarning("Could not verify FPGA ID, but continuing anyway...");
+        }
+        
+        DMAEngine::s_Connected = true;
+        Logger::LogSuccess("DMA Hardware Link Established");
+        return true;
     }
 #endif
-    Logger::LogError("DMA Initialization failed! Ensure vmm.dll is in the folder."); return false;
+    Logger::LogError("DMA Initialization failed! Check if vmm.dll/leechcore.dll are present and DMA is plugged in.");
+    return false;
 }
 bool ProfessionalInit::Step_WaitForGame() {
     Logger::LogSection("GAME SYNC");

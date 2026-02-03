@@ -395,13 +395,37 @@ void UpdateThread()
 // ============================================================================
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
 {
-    if (!DMAEngine::Initialize()) return 1;
-    PatternScanner::UpdateAllOffsets();
-    if (!CreateOverlayWindow()) return 1;
-    if (!InitGraphics()) return 1;
+    Logger::Initialize();
+    Logger::LogBanner();
+    Logger::LogInfo("Starting Project Zero Overlay...");
+
+    if (!CreateOverlayWindow()) {
+        Logger::LogError("Failed to create overlay window");
+        return 1;
+    }
+    
+    if (!InitGraphics()) {
+        Logger::LogError("Failed to initialize graphics");
+        return 1;
+    }
+
+    Logger::LogInfo("Overlay initialized. Starting DMA background thread...");
+
+    std::thread updateThread([]() {
+        Logger::LogInfo("DMA Thread: Initializing DMA Engine...");
+        if (DMAEngine::Initialize()) {
+            Logger::LogSuccess("DMA Thread: DMA Engine connected successfully");
+            PatternScanner::UpdateAllOffsets();
+            while (g_Running) {
+                DMAEngine::Update();
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        } else {
+            Logger::LogError("DMA Thread: Failed to initialize DMA Engine. Please check hardware/drivers.");
+        }
+    });
 
     std::thread inputThread(InputThread);
-    std::thread updateThread(UpdateThread);
     g_LastFPSTime = GetTickCount();
 
     while (g_Running)

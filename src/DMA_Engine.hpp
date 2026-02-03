@@ -48,6 +48,7 @@ struct DMAConfig {
     char deviceName[64] = "fpga";
     char processName[64] = "cod.exe";
     wchar_t processNameW[64] = L"cod.exe";
+    int manualPID = 0;
     uint32_t pid = 0;
     uintptr_t handle = 0;
     bool useFTD3XX = true;

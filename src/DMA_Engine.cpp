@@ -309,30 +309,50 @@ bool ProfessionalInit::Step_WaitForGame() {
     Logger::LogSection("GAME SYNC");
 #if DMA_ENABLED
     if (g_VMMDLL) {
-        DWORD pid = 0;
-        const char* possibleProcesses[] = { "cod.exe", "Call of Duty.exe", "ModernWarfare.exe" };
+        Logger::LogInfo("Performing Deep Scan for Call of Duty processes...");
         
-        for (const char* procName : possibleProcesses) {
-            Logger::LogInfo((std::string("Searching for ") + procName + "...").c_str());
-            if (VMMDLL_PidGetFromName(g_VMMDLL, (char*)procName, &pid)) {
-                g_DMA_PID = pid;
-                strcpy_s(g_Config.processName, procName);
-                
-                typedef ULONG64(VMMDLL_ProcessGetModuleBase_t)(VMM_HANDLE, DWORD, LPSTR);
-                VMMDLL_ProcessGetModuleBase_t* pGetModuleBase = (VMMDLL_ProcessGetModuleBase_t*)GetProcAddress(GetModuleHandleA("vmm.dll"), "VMMDLL_ProcessGetModuleBase");
-                
-                if (pGetModuleBase) {
-                    DMAEngine::s_BaseAddress = pGetModuleBase(g_VMMDLL, pid, (char*)procName);
-                    if (DMAEngine::s_BaseAddress) {
-                        Logger::LogSuccess((std::string("Game found on ") + procName + "! Base: " + std::to_string(DMAEngine::s_BaseAddress)).c_str());
-                        return true;
+        PDWORD pdwPids;
+        ULONG64 cPids = 0;
+        if (VMMDLL_PidList(g_VMMDLL, NULL, &cPids) && cPids > 0) {
+            pdwPids = (PDWORD)LocalAlloc(LMEM_ZEROINIT, cPids * sizeof(DWORD));
+            if (VMMDLL_PidList(g_VMMDLL, pdwPids, &cPids)) {
+                for (ULONG64 i = 0; i < cPids; i++) {
+                    VMMDLL_PROCESS_INFORMATION info;
+                    SIZE_T cbInfo = sizeof(info);
+                    if (VMMDLL_ProcessGetInformation(g_VMMDLL, pdwPids[i], &info, &cbInfo)) {
+                        std::string procName = info.szNameLong;
+                        std::transform(procName.begin(), procName.end(), procName.begin(), ::tolower);
+                        
+                        // Check for any CoD related process
+                        if (procName.find("cod") != std::string::npos || 
+                            procName.find("call of duty") != std::string::npos ||
+                            procName.find("modernwarfare") != std::string::npos ||
+                            procName.find("blackops") != std::string::npos) 
+                        {
+                            g_DMA_PID = pdwPids[i];
+                            strcpy_s(g_Config.processName, info.szNameLong);
+                            
+                            typedef ULONG64(VMMDLL_ProcessGetModuleBase_t)(VMM_HANDLE, DWORD, LPSTR);
+                            VMMDLL_ProcessGetModuleBase_t* pGetModuleBase = (VMMDLL_ProcessGetModuleBase_t*)GetProcAddress(GetModuleHandleA("vmm.dll"), "VMMDLL_ProcessGetModuleBase");
+                            
+                            if (pGetModuleBase) {
+                                DMAEngine::s_BaseAddress = pGetModuleBase(g_VMMDLL, g_DMA_PID, (char*)info.szNameLong);
+                                if (DMAEngine::s_BaseAddress) {
+                                    Logger::LogSuccess((std::string("DEEP SCAN: Found Game -> ") + info.szNameLong + " (PID: " + std::to_string(g_DMA_PID) + ")").c_str());
+                                    Logger::LogInfo((std::string("Base Address: 0x") + std::to_string(DMAEngine::s_BaseAddress)).c_str());
+                                    LocalFree(pdwPids);
+                                    return true;
+                                }
+                            }
+                        }
                     }
                 }
             }
+            LocalFree(pdwPids);
         }
     }
 #endif
-    Logger::LogWarning("Game not found or Base Address failed. Retrying in background...");
+    Logger::LogWarning("Deep Scan: No active game process detected. Ensure the game is running.");
     return true;
 }
 

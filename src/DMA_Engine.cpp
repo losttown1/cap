@@ -335,7 +335,15 @@ bool ProfessionalInit::Step_WaitForGame() {
                             
                             // Attempt CR3 Fix (Auto-EPRO)
                             Logger::LogInfo((std::string("Attempting CR3 Fix for ") + info.szNameLong + "...").c_str());
-                            VMMDLL_ConfigSet(g_VMMDLL, VMMDLL_OPT_PROCESS_DEVICE_READ_RETRY, 1);
+                            
+                            // Define missing constants if not present
+                            #ifndef VMMDLL_OPT_PROCESS_DEVICE_READ_RETRY
+                            #define VMMDLL_OPT_PROCESS_DEVICE_READ_RETRY 0x0000000200000000ULL
+                            #endif
+
+                            typedef BOOL(VMMDLL_ConfigSet_t)(VMM_HANDLE, ULONG64, ULONG64);
+                            VMMDLL_ConfigSet_t* pConfigSet = (VMMDLL_ConfigSet_t*)GetProcAddress(GetModuleHandleA("vmm.dll"), "VMMDLL_ConfigSet");
+                            if (pConfigSet) pConfigSet(g_VMMDLL, VMMDLL_OPT_PROCESS_DEVICE_READ_RETRY, 1);
                             
                             typedef ULONG64(VMMDLL_ProcessGetModuleBase_t)(VMM_HANDLE, DWORD, LPSTR);
                             VMMDLL_ProcessGetModuleBase_t* pGetModuleBase = (VMMDLL_ProcessGetModuleBase_t*)GetProcAddress(GetModuleHandleA("vmm.dll"), "VMMDLL_ProcessGetModuleBase");

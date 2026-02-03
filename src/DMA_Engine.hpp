@@ -17,28 +17,57 @@
 // ============================================================================
 // MATH TYPES
 // ============================================================================
-struct Vec2 { float x = 0, y = 0; Vec2() = default; Vec2(float _x, float _y) : x(_x), y(_y) {} };
+struct Vec2 { 
+    float x = 0, y = 0; 
+    Vec2() = default; 
+    Vec2(float _x, float _y) : x(_x), y(_y) {} 
+    Vec2 operator+(const Vec2& o) const { return {x + o.x, y + o.y}; }
+    Vec2 operator-(const Vec2& o) const { return {x - o.x, y - o.y}; }
+    Vec2 operator*(float s) const { return {x * s, y * s}; }
+    float Length() const { return sqrtf(x*x + y*y); }
+};
+
 struct Vec3 {
     float x = 0, y = 0, z = 0;
     Vec3() = default;
     Vec3(float _x, float _y, float _z) : x(_x), y(_y), z(_z) {}
     Vec3 operator-(const Vec3& o) const { return Vec3(x - o.x, y - o.y, z - o.z); }
     Vec3 operator+(const Vec3& o) const { return Vec3(x + o.x, y + o.y, z + o.z); }
+    Vec3 operator*(float s) const { return {x * s, y * s, z * s}; }
+    float Length() const { return sqrtf(x*x + y*y + z*z); }
+    float Length2D() const { return sqrtf(x*x + y*y); }
 };
+
 struct Matrix4x4 { float m[4][4] = {}; };
 
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
+enum class ControllerType { NONE, KMBOX_B_PLUS, KMBOX_NET, ARDUINO };
+
 struct DMAConfig {
     char deviceName[64] = "fpga";
     char processName[64] = "cod.exe";
+    wchar_t processNameW[64] = L"cod.exe";
     uint32_t pid = 0;
     uintptr_t handle = 0;
     bool useFTD3XX = true;
     bool useScatterReads = true;
+    bool useScatterRegistry = true;
+    bool enableOffsetUpdater = true;
+    bool enableDiagnostics = true;
+    bool autoCloseOnFail = false;
     int maxRetries = 3;
     int readTimeout = 100;
+    int updateRateHz = 120;
+    
+    // Controller settings
+    ControllerType controllerType = ControllerType::NONE;
+    bool controllerAutoDetect = true;
+    char controllerCOM[16] = "COM3";
+    char controllerIP[32] = "192.168.2.188";
+    int controllerPort = 8888;
+    char offsetURL[512] = DEFAULT_OFFSET_URL;
 };
 
 struct GameOffsetsStruct {
@@ -46,14 +75,21 @@ struct GameOffsetsStruct {
     uintptr_t EntityList = 0;
     uintptr_t ViewMatrix = 0;
     uintptr_t LocalPlayer = 0;
-};
+    uintptr_t PlayerBase = 0;
+    uintptr_t Refdef = 0;
+    uintptr_t BoneMatrix = 0;
+    uintptr_t WeaponInfo = 0;
 
-namespace GameOffsets {
-    constexpr uintptr_t EntityPos = 0x40;
-    constexpr uintptr_t EntityHealth = 0x28;
-    constexpr uintptr_t EntityTeam = 0x14;
-    constexpr uintptr_t EntityYaw = 0x50;
-}
+    static constexpr uintptr_t EntitySize = 0x568;
+    static constexpr uintptr_t EntityPos = 0x138;
+    static constexpr uintptr_t EntityHealth = 0x1C8;
+    static constexpr uintptr_t EntityMaxHealth = 0x1CC;
+    static constexpr uintptr_t EntityTeam = 0x1D0;
+    static constexpr uintptr_t EntityYaw = 0x148;
+    static constexpr uintptr_t EntityName = 0x200;
+    static constexpr uintptr_t EntityValid = 0x100;
+    static constexpr uintptr_t EntityStance = 0x1E0;
+};
 
 extern DMAConfig g_Config;
 extern GameOffsetsStruct g_Offsets;
@@ -64,6 +100,11 @@ extern GameOffsetsStruct g_Offsets;
 struct PlayerData {
     Vec3 origin;
     Vec3 headPos;
+    Vec2 screenPos;
+    float screenHeight = 0;
+    float screenWidth = 0;
+    bool onScreen = false;
+    bool isVisible = false;
     float yaw = 0;
     int health = 100;
     int maxHealth = 100;
@@ -79,7 +120,7 @@ struct PlayerData {
 // ============================================================================
 // SCATTER READ
 // ============================================================================
-enum class ScatterDataType { PLAYER_POSITION, PLAYER_HEALTH, PLAYER_TEAM, PLAYER_YAW, LOCAL_POSITION, LOCAL_YAW, VIEW_MATRIX, CUSTOM };
+enum class ScatterDataType { PLAYER_POSITION, PLAYER_HEALTH, PLAYER_TEAM, PLAYER_YAW, PLAYER_VALID, LOCAL_POSITION, LOCAL_YAW, VIEW_MATRIX, CUSTOM };
 
 struct ScatterEntry {
     uintptr_t address = 0;
@@ -89,11 +130,12 @@ struct ScatterEntry {
     int playerIndex = -1;
 };
 
-struct PlayerBuffer {
+struct PlayerRawData {
     Vec3 position;
     int health = 0;
     int team = 0;
     float yaw = 0;
+    uint8_t valid = 0;
 };
 
 class ScatterReadRegistry {
@@ -106,14 +148,14 @@ public:
     void Clear();
     int GetTotalBytes() const;
     int GetTransactionCount() const { return m_TransactionCount; }
-    std::vector<PlayerBuffer>& GetPlayerBuffers() { return m_PlayerBuffers; }
+    std::vector<PlayerRawData>& GetPlayerBuffers() { return m_PlayerBuffers; }
     Vec3 GetLocalPosition() const { return m_LocalPosition; }
     float GetLocalYaw() const { return m_LocalYaw; }
     Matrix4x4 GetViewMatrix() const { return m_ViewMatrix; }
     
 private:
     std::vector<ScatterEntry> m_Entries;
-    std::vector<PlayerBuffer> m_PlayerBuffers;
+    std::vector<PlayerRawData> m_PlayerBuffers;
     Vec3 m_LocalPosition;
     float m_LocalYaw = 0;
     Matrix4x4 m_ViewMatrix;
@@ -123,9 +165,18 @@ private:
 extern ScatterReadRegistry g_ScatterRegistry;
 
 // ============================================================================
-// LOGGING (Silent Mode)
+// LOGGING
 // ============================================================================
-enum class ConsoleColor { WHITE, GREEN, RED, YELLOW, CYAN, MAGENTA, GRAY };
+enum ConsoleColor {
+    COLOR_DEFAULT = 7,
+    COLOR_RED = 12,
+    COLOR_GREEN = 10,
+    COLOR_YELLOW = 14,
+    COLOR_CYAN = 11,
+    COLOR_WHITE = 15,
+    COLOR_GRAY = 8,
+    COLOR_MAGENTA = 13
+};
 
 class Logger {
 public:
@@ -135,7 +186,7 @@ public:
     static void HideConsole();
     static void SetColor(ConsoleColor);
     static void ResetColor();
-    static void Log(const char*, ConsoleColor = ConsoleColor::WHITE);
+    static void Log(const char*, ConsoleColor = COLOR_DEFAULT);
     static void LogSuccess(const char*);
     static void LogError(const char*);
     static void LogWarning(const char*);
@@ -164,9 +215,53 @@ struct InitStatus {
     bool offsetsValid = false;
     bool controllerConnected = false;
     bool allChecksPassed = false;
+    bool configLoaded = false;
+    
+    char dmaDriver[32] = {0};
+    char dmaDevice[64] = {0};
+    char controllerName[64] = {0};
+    char userName[64] = {0};
+    char configName[64] = {0};
+    char gameProcess[64] = {0};
+    int passedChecks = 0;
+    int totalChecks = 0;
+    int failedChecks = 0;
 };
 
 extern InitStatus g_InitStatus;
+
+// ============================================================================
+// DIAGNOSTICS
+// ============================================================================
+enum class DiagnosticResult { SUCCESS, DEVICE_NOT_FOUND, FIRMWARE_MISMATCH, MEMORY_ERROR, PROCESS_NOT_FOUND, ACCESS_DENIED };
+
+struct DiagnosticStatus {
+    DiagnosticResult deviceCheck = DiagnosticResult::SUCCESS;
+    DiagnosticResult firmwareCheck = DiagnosticResult::SUCCESS;
+    DiagnosticResult memoryCheck = DiagnosticResult::SUCCESS;
+    DiagnosticResult processCheck = DiagnosticResult::SUCCESS;
+    float readSpeed = 0;
+    int latency = 0;
+    bool allPassed = true;
+};
+
+extern DiagnosticStatus g_DiagStatus;
+
+class DiagnosticSystem {
+public:
+    static const char* GetErrorString(DiagnosticResult);
+    static bool RunAllDiagnostics();
+    static DiagnosticResult CheckDeviceHandshake();
+    static DiagnosticResult CheckFirmwareIntegrity();
+    static DiagnosticResult CheckMemorySpeed();
+    static DiagnosticResult CheckProcessAccess();
+    static void SelfDestruct(const char*);
+    static void ShowErrorPopup(const char*, const char*);
+    static bool IsGenericDeviceID(const char*);
+    static bool IsLeakedDeviceID(const char*);
+    static float MeasureReadSpeed(uintptr_t, size_t, int);
+    static int MeasureLatency(uintptr_t, int);
+};
 
 // ============================================================================
 // DMA ENGINE
@@ -182,6 +277,7 @@ public:
     static const char* GetStatus();
     static const char* GetDeviceInfo();
     static const char* GetDriverMode();
+    static void Update();
     
     template<typename T> static T Read(uintptr_t);
     static bool ReadBuffer(uintptr_t, void*, size_t);
@@ -205,14 +301,14 @@ public:
 // ============================================================================
 // HARDWARE CONTROLLER
 // ============================================================================
-enum class ControllerType { NONE, KMBOX_B_PLUS, KMBOX_NET, ARDUINO };
-
 struct ControllerConfig {
     ControllerType type = ControllerType::NONE;
     char comPort[16] = "COM3";
     char ipAddress[32] = "192.168.2.188";
     int port = 16896;
     int baudRate = 115200;
+    bool isConnected = false;
+    char deviceName[64] = "None";
 };
 
 extern ControllerConfig g_ControllerConfig;
@@ -278,6 +374,7 @@ public:
     static bool s_Synced;
     static char s_OffsetURL[512];
     static char s_LastError[256];
+    static constexpr const char* DEFAULT_OFFSET_URL = "https://raw.githubusercontent.com/offsets/bo6/main/offsets.txt";
     
 private:
     static bool HttpGet(const char*, std::string&);
@@ -321,39 +418,6 @@ public:
 };
 
 // ============================================================================
-// DIAGNOSTICS
-// ============================================================================
-enum class DiagnosticResult { SUCCESS, DEVICE_NOT_FOUND, FIRMWARE_MISMATCH, MEMORY_ERROR, PROCESS_NOT_FOUND, ACCESS_DENIED };
-
-struct DiagnosticStatus {
-    DiagnosticResult deviceCheck = DiagnosticResult::SUCCESS;
-    DiagnosticResult firmwareCheck = DiagnosticResult::SUCCESS;
-    DiagnosticResult memoryCheck = DiagnosticResult::SUCCESS;
-    DiagnosticResult processCheck = DiagnosticResult::SUCCESS;
-    float readSpeed = 0;
-    int latency = 0;
-    bool allPassed = true;
-};
-
-extern DiagnosticStatus g_DiagStatus;
-
-class DiagnosticSystem {
-public:
-    static const char* GetErrorString(DiagnosticResult);
-    static bool RunAllDiagnostics();
-    static DiagnosticResult CheckDeviceHandshake();
-    static DiagnosticResult CheckFirmwareIntegrity();
-    static DiagnosticResult CheckMemorySpeed();
-    static DiagnosticResult CheckProcessAccess();
-    static void SelfDestruct(const char*);
-    static void ShowErrorPopup(const char*, const char*);
-    static bool IsGenericDeviceID(const char*);
-    static bool IsLeakedDeviceID(const char*);
-    static float MeasureReadSpeed(uintptr_t, size_t, int);
-    static int MeasureLatency(uintptr_t, int);
-};
-
-// ============================================================================
 // PROFESSIONAL INIT
 // ============================================================================
 class ProfessionalInit {
@@ -365,6 +429,14 @@ public:
     static void GetWindowsVersion(char*, size_t);
     static void GetKeyboardState(char*, size_t);
     static void GetMouseState(char*, size_t);
+    
+    static bool Step_LoginSequence();
+    static bool Step_LoadConfig();
+    static bool Step_CheckOffsetUpdates();
+    static bool Step_ConnectController();
+    static bool Step_ConnectDMA();
+    static bool Step_WaitForGame();
+    static bool Step_CheckSystemState();
 };
 
 // ============================================================================
@@ -381,6 +453,7 @@ public:
     static PlayerData& GetLocalPlayer();
     static int GetAliveCount();
     static int GetEnemyCount();
+    static std::mutex& GetMutex() { return s_Mutex; }
     
     static std::vector<PlayerData> s_Players;
     static PlayerData s_LocalPlayer;
@@ -398,10 +471,6 @@ public:
     static void Update();
     static bool IsEnabled();
     static void SetEnabled(bool);
-    static int FindBestTarget(float, float);
-    static Vec2 GetTargetScreenPos(int);
-    static void AimAt(const Vec2&, float);
-    static void MoveMouse(int, int);
     
     static bool s_Enabled;
     static int s_CurrentTarget;
@@ -409,39 +478,12 @@ public:
 };
 
 // ============================================================================
-// CONFIG
-// ============================================================================
-bool LoadConfig(const char*);
-bool SaveConfig(const char*);
-void CreateDefaultConfig(const char*);
-
-// ============================================================================
 // UTILITIES
 // ============================================================================
-bool WorldToScreen(const Vec3&, Vec2&, int, int);
-bool WorldToRadar(const Vec3&, const Vec3&, float, Vec2&, float, float, float);
-float GetFOVTo(const Vec2&, const Vec2&);
-Vec3 CalcAngle(const Vec3&, const Vec3&);
-void SmoothAngle(Vec3&, const Vec3&, float);
-
-// ============================================================================
-// MAIN ENTRY FUNCTIONS (Called from main())
-// ============================================================================
-// Main Entry Functions
-extern bool InitDMA();
-extern bool AutoDetectKMBox();
-extern void RunStartupDiagnostics();
-
-// Status Functions
-extern const char* GetKMBoxStatus();
-extern const char* GetKMBoxFirmware();
-extern bool IsKMBoxConnected();
-extern bool IsHardwareScanComplete();
-extern bool IsDMAOnline();
-extern const char* GetDMADiagnostic();
-extern bool IsDMAMemoryReadable();
-extern void SetBlackOverlayEnabled(bool enabled);
-extern bool IsBlackOverlayEnabled();
-
-// Real DMA Data
-extern std::vector<PlayerData> GetRealEntitiesFromDMA();
+bool WorldToScreen(const Vec3& world, Vec2& screen, int width, int height);
+bool WorldToRadar(const Vec3& world, const Vec3& local, float yaw, Vec2& radar, float cx, float cy, float size);
+float GetFOVTo(const Vec2& center, const Vec2& target);
+Vec3 CalcAngle(const Vec3& source, const Vec3& destination);
+void SmoothAngle(Vec3& current, const Vec3& target, float smooth);
+const char* ControllerTypeToString(ControllerType type);
+void CreateDefaultConfig(const char* filename);

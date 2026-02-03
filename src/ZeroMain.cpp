@@ -748,12 +748,27 @@ void RenderESP()
         if (!p.valid || !p.isAlive) continue;
         if (!p.isEnemy && !g_Settings.espTeammates) continue;
 
+        // Use real WorldToScreen logic
+        if (!WorldToScreen(p.origin, p.screenPos, g_ScreenW, g_ScreenH))
+        {
+            p.onScreen = false;
+            continue;
+        }
 
-        float simScale = 500.0f / (p.distance + 10.0f);
-        p.screenPos.x = screenCenter.x + p.origin.x * simScale * 0.5f;
-        p.screenPos.y = screenCenter.y - p.origin.y * simScale * 0.5f;
-        p.screenHeight = 100.0f * simScale;
-        p.screenWidth = p.screenHeight * 0.4f;
+        // Calculate box dimensions based on distance or head position
+        Vec2 headScreen;
+        if (WorldToScreen(p.headPos, headScreen, g_ScreenW, g_ScreenH))
+        {
+            p.screenHeight = abs(p.screenPos.y - headScreen.y) * 1.2f;
+            p.screenWidth = p.screenHeight * 0.5f;
+        }
+        else
+        {
+            float scale = 1000.0f / (p.distance + 1.0f);
+            p.screenHeight = 50.0f * scale;
+            p.screenWidth = p.screenHeight * 0.5f;
+        }
+
         p.onScreen = (p.screenPos.x > 0 && p.screenPos.x < g_ScreenW &&
                       p.screenPos.y > 0 && p.screenPos.y < g_ScreenH);
 

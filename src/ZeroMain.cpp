@@ -427,9 +427,22 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
         g_D2DTarget->BeginDraw();
         g_D2DTarget->Clear(D2D1::ColorF(0, 0, 0, 0));
 
-        RenderESP();
-        RenderPerformance();
-        RenderMenu();
+        if (!DMAEngine::IsConnected())
+        {
+            DrawTextW2(L"STATUS: WAITING FOR DMA HARDWARE...", 50, 50, Colors::Yellow, g_FontBold);
+            DrawTextW2(L"Please ensure your DMA card is plugged in and drivers are loaded.", 50, 80, Colors::Gray, g_Font);
+        }
+        else if (DMAEngine::s_BaseAddress == 0)
+        {
+            DrawTextW2(L"STATUS: DMA CONNECTED | WAITING FOR GAME (cod.exe)...", 50, 50, Colors::Cyan, g_FontBold);
+            DrawTextW2(L"Please start the game to begin synchronization.", 50, 80, Colors::Gray, g_Font);
+        }
+        else
+        {
+            RenderESP();
+            RenderPerformance();
+            RenderMenu();
+        }
 
         g_D2DTarget->EndDraw();
         g_SwapChain->Present(0, 0);

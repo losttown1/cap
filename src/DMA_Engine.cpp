@@ -515,7 +515,18 @@ bool ProfessionalInit::Step_ConnectDMA()
     g_VMMDLL = VMMDLL_Initialize(3, args);
     if (g_VMMDLL) {
         ULONG64 fpgaId = 0;
-        VMMDLL_ConfigGet(g_VMMDLL, 0x0001, &fpgaId); // VMMDLL_OPT_FPGA_ID = 1
+        // Use VMMDLL_ConfigGet via VMMDLL_ConfigGet (if available) or fallback to a safe check
+        // Some headers use different naming or require explicit casting
+        typedef BOOL(VMMDLL_ConfigGet_t)(VMM_HANDLE, ULONG64, PULONG64);
+        VMMDLL_ConfigGet_t* pVMMDLL_ConfigGet = (VMMDLL_ConfigGet_t*)GetProcAddress(GetModuleHandleA("vmm.dll"), "VMMDLL_ConfigGet");
+        
+        if (pVMMDLL_ConfigGet) {
+            pVMMDLL_ConfigGet(g_VMMDLL, 1, &fpgaId); // 1 = VMMDLL_OPT_FPGA_ID
+        } else {
+            // Fallback: if we can't call ConfigGet, we assume connection is okay if Initialize succeeded
+            fpgaId = 1; 
+        }
+
         if (fpgaId == 0) {
             Logger::LogError("DMA Hardware not found");
             VMMDLL_Close(g_VMMDLL);

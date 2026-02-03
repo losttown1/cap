@@ -236,14 +236,25 @@ bool InitGraphics()
     backBuffer->Release();
 
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory1), (void**)&g_D2DFactory);
+    
+    IDXGIDevice* dxgiDevice;
+    g_D3DDevice->QueryInterface(__uuidof(IDXGIDevice), (void**)&dxgiDevice);
+    
+    ID2D1Device* d2dDevice;
+    g_D2DFactory->CreateDevice(dxgiDevice, &d2dDevice);
+    d2dDevice->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &g_D2DTarget);
+    
     IDXGISurface* surface;
     g_SwapChain->GetBuffer(0, __uuidof(IDXGISurface), (void**)&surface);
-    g_D2DFactory->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &g_D2DTarget);
+    
     ID2D1Bitmap1* d2dBitmap;
     g_D2DTarget->CreateBitmapFromDxgiSurface(surface, nullptr, &d2dBitmap);
     g_D2DTarget->SetTarget(d2dBitmap);
+    
     surface->Release();
     d2dBitmap->Release();
+    d2dDevice->Release();
+    dxgiDevice->Release();
 
     g_D2DTarget->CreateSolidColorBrush(Colors::White, &g_Brush);
     DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown**)&g_DWriteFactory);

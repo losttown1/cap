@@ -37,6 +37,16 @@ local Party = {
 }
 
 -- ═══════════════════════════════════════════════════════════════════════════════
+-- FORWARD DECLARATIONS
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+local CleanupContract
+local CloseTablet
+local CleanupGuards
+local StopContractTimer
+local StopGPSAlerts
+
+-- ═══════════════════════════════════════════════════════════════════════════════
 -- INITIALIZATION
 -- ═══════════════════════════════════════════════════════════════════════════════
 
@@ -46,7 +56,9 @@ RegisterNetEvent('QBCore:Client:OnPlayerLoaded', function()
 end)
 
 RegisterNetEvent('QBCore:Client:OnPlayerUnload', function()
-    CleanupContract(false)
+    if CleanupContract then
+        CleanupContract(false)
+    end
     PlayerData = {}
     BoostingData = {}
 end)
@@ -62,8 +74,12 @@ end)
 
 AddEventHandler('onResourceStop', function(resource)
     if resource == GetCurrentResourceName() then
-        CleanupContract(false)
-        CloseTablet()
+        if CleanupContract then
+            CleanupContract(false)
+        end
+        if CloseTablet then
+            CloseTablet()
+        end
     end
 end)
 
@@ -186,7 +202,7 @@ function OpenTablet()
     end)
 end
 
-function CloseTablet()
+CloseTablet = function()
     if not IsTabletOpen then return end
     
     IsTabletOpen = false
@@ -341,7 +357,7 @@ end)
 -- CONTRACT TIMER
 -- ═══════════════════════════════════════════════════════════════════════════════
 
-function StartContractTimer(duration)
+local function StartContractTimer(duration)
     if TimerThread then return end
     
     TimerThread = true
@@ -388,7 +404,7 @@ function StartContractTimer(duration)
     end)
 end
 
-function StopContractTimer()
+StopContractTimer = function()
     TimerThread = false
 end
 
@@ -398,7 +414,7 @@ end
 
 local GPSThread = false
 
-function StartGPSAlerts()
+local function StartGPSAlerts()
     if GPSThread or GPSDisabled then return end
     if not ActiveContract then return end
     
@@ -414,7 +430,7 @@ function StartGPSAlerts()
                 local ped = PlayerPedId()
                 local currentVehicle = GetVehiclePedIsIn(ped, false)
                 
-                if currentVehicle and currentVehicle == ContractVehicle?.entity then
+                if currentVehicle and ContractVehicle and currentVehicle == ContractVehicle.entity then
                     -- Send GPS alert to police
                     local coords = GetEntityCoords(ped)
                     TriggerServerEvent('zr-carboosting:server:gpsAlert', ActiveContract.id, coords)
@@ -427,7 +443,7 @@ function StartGPSAlerts()
     end)
 end
 
-function StopGPSAlerts()
+StopGPSAlerts = function()
     GPSThread = false
 end
 
@@ -487,7 +503,7 @@ end)
 -- CLEANUP
 -- ═══════════════════════════════════════════════════════════════════════════════
 
-function CleanupContract(failed)
+CleanupContract = function(failed)
     StopContractTimer()
     StopGPSAlerts()
     
@@ -519,7 +535,7 @@ function CleanupContract(failed)
     Utils.Debug('Contract cleanup completed')
 end
 
-function CleanupGuards()
+CleanupGuards = function()
     for _, guard in pairs(Guards) do
         if DoesEntityExist(guard) then
             DeleteEntity(guard)
@@ -565,4 +581,16 @@ end)
 
 exports('GetPlayerLevel', function()
     return BoostingData.level or 1
+end)
+
+exports('IsGPSDisabled', function()
+    return GPSDisabled
+end)
+
+exports('GetContractVehicle', function()
+    return ContractVehicle
+end)
+
+exports('GetDropOffBlip', function()
+    return DropOffBlip
 end)

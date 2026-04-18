@@ -13,6 +13,7 @@ Config.Dispatch = 'ps-dispatch' -- 'ps-dispatch', 'cd_dispatch', 'custom'
 
 Config.TabletItem = 'boosting_laptop' -- Item required to open tablet
 Config.TabletCommand = 'boosting' -- Command to open tablet (for testing/admin)
+Config.Key = 'F6' -- Default key for tablet
 
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- PROGRESSION SYSTEM

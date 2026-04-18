@@ -59,9 +59,15 @@ CreateThread(function()
                             end
                         else
                             -- Vehicle is ready, show GPS disable option if not disabled
-                            local GPSDisabled = exports['zr-carboosting']:IsGPSDisabled and exports['zr-carboosting']:IsGPSDisabled() or false
+                            local isGPSDisabled = false
+                            local success, result = pcall(function()
+                                return exports['zr-carboosting']:IsGPSDisabled()
+                            end)
+                            if success then
+                                isGPSDisabled = result
+                            end
                             
-                            if not GPSDisabled and not IsDisablingGPS then
+                            if not isGPSDisabled and not IsDisablingGPS then
                                 DrawText3D(GetEntityCoords(vehicle) + vector3(0, 0, 1.0), '[G] Disable GPS Tracker')
                                 
                                 if IsControlJustPressed(0, 47) then -- G key
@@ -313,9 +319,11 @@ end)
 
 function SetDropOffDestination(location)
     -- Remove old blip
-    local DropOffBlip = exports['zr-carboosting']:GetDropOffBlip and exports['zr-carboosting']:GetDropOffBlip()
-    if DropOffBlip then
-        RemoveBlip(DropOffBlip)
+    local success, existingBlip = pcall(function()
+        return exports['zr-carboosting']:GetDropOffBlip()
+    end)
+    if success and existingBlip then
+        RemoveBlip(existingBlip)
     end
     
     -- Create new blip

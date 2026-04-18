@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Boosting Tablet</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div id="app" class="hidden">
+        <!-- Tablet Container -->
+        <div class="tablet">
+            <!-- Header -->
+            <div class="header">
+                <div class="header-left">
+                    <i class="fas fa-car-side logo"></i>
+                    <span class="title">BOOST<span class="accent">NET</span></span>
+                </div>
+                <div class="header-right">
+                    <div class="heat-indicator" id="heatIndicator">
+                        <i class="fas fa-fire"></i>
+                        <span id="heatValue">0%</span>
+                    </div>
+                    <button class="close-btn" id="closeBtn">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Player Stats Bar -->
+            <div class="stats-bar">
+                <div class="stat">
+                    <i class="fas fa-user"></i>
+                    <span>Level <strong id="playerLevel">1</strong></span>
+                </div>
+                <div class="stat">
+                    <i class="fas fa-star"></i>
+                    <span id="playerPoints">0</span> XP
+                </div>
+                <div class="stat currency">
+                    <i class="fas fa-coins"></i>
+                    <span id="playerCurrency">$0</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress" id="levelProgress"></div>
+                </div>
+            </div>
+
+            <!-- Navigation -->
+            <div class="nav">
+                <button class="nav-btn active" data-tab="contracts">
+                    <i class="fas fa-file-contract"></i>
+                    <span>Contracts</span>
+                </button>
+                <button class="nav-btn" data-tab="store">
+                    <i class="fas fa-shopping-cart"></i>
+                    <span>Store</span>
+                </button>
+                <button class="nav-btn" data-tab="crew">
+                    <i class="fas fa-users"></i>
+                    <span>Crew</span>
+                </button>
+                <button class="nav-btn" data-tab="stats">
+                    <i class="fas fa-chart-bar"></i>
+                    <span>Stats</span>
+                </button>
+            </div>
+
+            <!-- Content -->
+            <div class="content">
+                <!-- Contracts Tab -->
+                <div class="tab-content active" id="contracts-tab">
+                    <div class="contracts-grid" id="contractsGrid">
+                        <!-- Contracts will be populated here -->
+                    </div>
+                </div>
+
+                <!-- Store Tab -->
+                <div class="tab-content" id="store-tab">
+                    <div class="store-grid" id="storeGrid">
+                        <!-- Store items will be populated here -->
+                    </div>
+                </div>
+
+                <!-- Crew Tab -->
+                <div class="tab-content" id="crew-tab">
+                    <div class="crew-container">
+                        <div class="crew-header">
+                            <h3>Your Crew</h3>
+                            <button class="btn btn-primary" id="createCrewBtn">
+                                <i class="fas fa-plus"></i> Create Crew
+                            </button>
+                        </div>
+                        <div class="crew-members" id="crewMembers">
+                            <div class="no-crew">
+                                <i class="fas fa-users-slash"></i>
+                                <p>You are not in a crew</p>
+                            </div>
+                        </div>
+                        <div class="invite-section hidden" id="inviteSection">
+                            <h4>Invite Players</h4>
+                            <div class="player-list" id="playerList">
+                                <!-- Online players will be listed here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stats Tab -->
+                <div class="tab-content" id="stats-tab">
+                    <div class="stats-container">
+                        <div class="stats-card">
+                            <i class="fas fa-check-circle"></i>
+                            <div class="stats-info">
+                                <span class="stats-value" id="completedContracts">0</span>
+                                <span class="stats-label">Completed</span>
+                            </div>
+                        </div>
+                        <div class="stats-card">
+                            <i class="fas fa-times-circle"></i>
+                            <div class="stats-info">
+                                <span class="stats-value" id="failedContracts">0</span>
+                                <span class="stats-label">Failed</span>
+                            </div>
+                        </div>
+                        <div class="stats-card">
+                            <i class="fas fa-percentage"></i>
+                            <div class="stats-info">
+                                <span class="stats-value" id="successRate">0%</span>
+                                <span class="stats-label">Success Rate</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Active Contract Overlay -->
+            <div class="active-contract hidden" id="activeContract">
+                <div class="contract-info">
+                    <div class="contract-header">
+                        <span class="contract-class" id="activeClass">S</span>
+                        <span class="contract-title" id="activeTitle">Active Contract</span>
+                    </div>
+                    <div class="contract-timer">
+                        <i class="fas fa-clock"></i>
+                        <span id="contractTimer">00:00</span>
+                    </div>
+                    <div class="gps-status" id="gpsStatus">
+                        <i class="fas fa-satellite-dish"></i>
+                        <span>GPS Active</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Contract Details Modal -->
+        <div class="modal hidden" id="contractModal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="modalTitle">Contract Details</h3>
+                    <button class="close-modal" id="closeModal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="vehicle-preview">
+                        <img id="vehicleImage" src="" alt="Vehicle">
+                        <div class="vehicle-info">
+                            <h4 id="vehicleName">Vehicle</h4>
+                            <span id="vehicleBrand">Brand</span>
+                        </div>
+                    </div>
+                    <div class="contract-types" id="contractTypes">
+                        <!-- Contract type buttons -->
+                    </div>
+                    <div class="rewards-section">
+                        <h4>Rewards</h4>
+                        <div class="rewards-grid" id="rewardsGrid">
+                            <!-- Rewards will be shown here -->
+                        </div>
+                    </div>
+                    <div class="requirements-section">
+                        <h4>Requirements</h4>
+                        <div class="requirements" id="requirements">
+                            <!-- Requirements will be shown here -->
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" id="cancelContract">Cancel</button>
+                    <button class="btn btn-primary" id="acceptContract">Accept Contract</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/script.js"></script>
+</body>
+</html>

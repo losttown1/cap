@@ -1,0 +1,24 @@
+/.vs/
+/x64/
+/Debug/
+/Release/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+*.pdb
+*.ipch
+*.obj
+*.ilk
+*.log
+*.tlog
+*.idb
+*.exe
+*.dll
+*.exp
+*.pch
+*.cache
+
+# Keep checked-in libs
+!/libs/
+!/libs/*.lib
